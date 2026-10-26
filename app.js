@@ -12,7 +12,7 @@
   const MAX_HISTORY = 24;
   const MAX_FILE_CHARS = 60000;
   const ARTIFACT_MIN_LINES = 12;
-  const PREVIEW_LANGS = ["html", "htm", "svg", "jsx", "tsx", "react", "design"];
+  const PREVIEW_LANGS = ["html", "htm", "svg", "jsx", "tsx", "react", "design", "flyer"];
   const DEFAULT_SYSTEM =
     "You are VastAI, a helpful, knowledgeable and friendly AI assistant. " +
     "Give clear, accurate, well-structured answers. Use markdown when it helps (lists, tables, code blocks with language tags). " +
@@ -25,7 +25,7 @@
     '{"prompt":"detailed English description: subject, style, colours, lighting, composition, no text","width":1024,"height":1024} (1344x768 landscape, 768x1344 portrait, max 4 blocks). ' +
     "Image models cannot write readable text.";
   const DESIGN_RULES =
-    "\n\nDesigns: for anything with words on it (flyer, poster, banner, social media post, ad, business card, invitation, certificate, menu, thumbnail, logo with a name) reply with one short line then ONE ```design block: " +
+    "\n\nOther designs: for business cards, invitations, certificates, menus, banners, thumbnails or a logo with a name (anything with words that is not a flyer/poster/post) reply with one short line then ONE ```design block: " +
     'a complete HTML document whose body holds a single <div id="design" style="width:Wpx;height:Hpx;position:relative;overflow:hidden"> (put the size inline) (flyer/poster 1080x1350, square post 1080x1080, story 1080x1920, banner 1500x500, business card 1050x600). ' +
     "Make it look like a professional graphic designer made it: strong hierarchy, big bold headline, Google Fonts (link in head), rich gradients, shapes, icons (emoji or inline SVG), good contrast, all real text from the request (dates, prices, phone, CTA). " +
     "For photos use <img> with src https://image.pollinations.ai/prompt/URL_ENCODED_PROMPT?width=W&height=H&nologo=true (describe the photo only, never text in it) and object-fit:cover. No external JS. Then a one-line summary.";
@@ -105,7 +105,7 @@
     }
     return blocks;
   }
-  const isDesign = (b) => !!b && b.lang === "design";
+  const isDesign = (b) => !!b && (b.lang === "design" || b.lang === "flyer");
   const isFile = (b) => !!b && VastFiles.FILE_LANGS.includes(b.lang);
   const isArtifact = (b) => isFile(b) || PREVIEW_LANGS.includes(b.lang) || b.code.split("\n").length >= ARTIFACT_MIN_LINES;
   const canPreview = (b) => isFile(b) || PREVIEW_LANGS.includes(b.lang);
@@ -113,6 +113,11 @@
 
   function fileNameFor(b, text) {
     if (isFile(b)) { const sp = b.closed && specOf(b); return sp ? VastFiles.fileName(b.lang, sp) : VastFiles.LABEL[b.lang]; }
+    if (b.lang === "flyer") {
+      const sp = specOf(b);
+      const t = sp && [sp.headline, sp.highlight].filter(Boolean).join(" ");
+      return (t ? t.slice(0, 50) + " Flyer" : "Flyer");
+    }
     if (isDesign(b)) {
       const t = (b.code.match(/<title>([^<]{1,60})<\/title>/i) || [])[1];
       return t ? t.trim() : "Design";
@@ -172,7 +177,7 @@
         card.dataset.block = idx;
         const live = opts.streaming && !block.closed;
         card.innerHTML = `<div class="art-ic file-ic" style="background:linear-gradient(135deg,#f59e0b,#ec4899)">🎨</div>` +
-          `<div class="art-text"><div class="art-name">${escapeHtml(fileNameFor(block))}</div><div class="art-sub ${live ? "live" : ""}">${live ? "Designing... " + block.code.split("\n").length + " lines" : "Design · click to preview"}</div></div>` +
+          `<div class="art-text"><div class="art-name">${escapeHtml(fileNameFor(block))}</div><div class="art-sub ${live ? "live" : ""}">${live ? "Designing... " + block.code.split("\n").length + " lines" : (block.lang === "flyer" ? "Flyer" : "Design") + " · click to preview"}</div></div>` +
           (live ? "" : `<button class="dl-file" data-png="1" title="Download PNG">⤓ PNG</button>`);
         pre.replaceWith(card);
         return;
@@ -309,6 +314,108 @@
     return { w: w || 1080, h: h || (w === 1500 ? 500 : 1350) };
   }
 
+  /* ---------- Flyer photos: user's photo with background removed (in-browser, free) ---------- */
+  const cutCache = new Map(); // key -> dataURL of cut-out, or "pending"/"failed"
+  const photoKey = (d) => { let h = 7; for (let i = 0; i < d.length; i += 97) h = (h * 31 + d.charCodeAt(i)) >>> 0; return "cut_" + d.length + "_" + h; };
+  const idb = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => { const r = indexedDB.open("vastai", 1); r.onupgradeneeded = () => r.result.createObjectStore("assets"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+    return {
+      get: (k) => open().then((db) => new Promise((res) => { const q = db.transaction("assets").objectStore("assets").get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(null); })).catch(() => null),
+      set: (k, v) => open().then((db) => new Promise((res) => { const t = db.transaction("assets", "readwrite"); t.objectStore("assets").put(v, k); t.oncomplete = res; t.onerror = res; })).catch(() => null),
+    };
+  })();
+
+  function chatPhoto(c) {
+    c = c || current();
+    if (!c) return null;
+    for (let i = c.messages.length - 1; i >= 0; i--) { const m = c.messages[i]; if (m.role === "user" && m.images?.length) return m.images[m.images.length - 1]; }
+    return null;
+  }
+
+  let bgLib = null;
+  async function removeBackground(dataUrl) {
+    if (!bgLib) bgLib = import("https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/+esm");
+    const mod = await bgLib;
+    const fn = mod.removeBackground || mod.default?.removeBackground || mod.default;
+    const blob = await fn(dataUrl, {
+      publicPath: "https://staticimgly.com/@imgly/background-removal-data/1.4.5/dist/",
+      model: "medium", output: { format: "image/png", quality: 0.9 },
+      progress: (key, cur, total) => { if (/fetch/.test(key) && total) el.panelStatus.textContent = `✂ Downloading cut-out tool ${Math.round((cur / total) * 100)}%`; },
+    });
+    return trimAlpha(await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); }));
+  }
+  // Crop empty transparent edges and cap the size
+  function trimAlpha(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+        const x = c.getContext("2d"); x.drawImage(img, 0, 0);
+        const d = x.getImageData(0, 0, c.width, c.height).data;
+        let t = c.height, l = c.width, r = 0, b = 0;
+        for (let yy = 0; yy < c.height; yy += 2) for (let xx = 0; xx < c.width; xx += 2) if (d[(yy * c.width + xx) * 4 + 3] > 20) { if (yy < t) t = yy; if (yy > b) b = yy; if (xx < l) l = xx; if (xx > r) r = xx; }
+        if (r <= l || b <= t) return resolve(dataUrl);
+        const w = r - l + 1, h = b - t + 1, sc = Math.min(1, 1500 / h);
+        const o = document.createElement("canvas"); o.width = Math.round(w * sc); o.height = Math.round(h * sc);
+        o.getContext("2d").drawImage(c, l, t, w, h, 0, 0, o.width, o.height);
+        resolve(o.toDataURL("image/png"));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+
+  async function ensureCutout(photo) {
+    const k = photoKey(photo);
+    if (cutCache.has(k)) return;
+    cutCache.set(k, "pending");
+    const stored = await idb.get(k);
+    if (stored) { cutCache.set(k, stored); refreshFlyer(); return; }
+    el.panelStatus.textContent = "✂ Removing photo background...";
+    try {
+      const cut = await removeBackground(photo);
+      cutCache.set(k, cut); idb.set(k, cut);
+    } catch (err) {
+      console.warn("Background removal failed", err);
+      cutCache.set(k, "failed");
+      toast("Couldn't remove the photo background, using the original photo");
+    }
+    el.panelStatus.textContent = "";
+    refreshFlyer();
+  }
+  function refreshFlyer() {
+    if (panelBlock && panelBlock.lang === "flyer" && el.panel.classList.contains("show-preview")) setTab("preview");
+    el.messages.querySelectorAll(".flyer-thumb").length; // thumbnails re-render lazily
+  }
+
+  // Resolve the person image for a flyer spec
+  function flyerPhoto(sp) {
+    const user = chatPhoto();
+    if ((sp.photo === "user" || (!sp.photo && user)) && user) {
+      const k = photoKey(user), cut = cutCache.get(k);
+      if (!cutCache.has(k)) ensureCutout(user);
+      if (cut && cut !== "pending" && cut !== "failed") return { src: cut, cut: true };
+      return { src: user, cut: false };
+    }
+    const prompt = VastFlyer.personPrompt(sp);
+    if (prompt) {
+      const S = VastFlyer.sizeOf(sp);
+      return { src: `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt + ", isolated on pure white background, studio lighting, high detail")}?width=768&height=1024&nologo=true&seed=${hashSeed(prompt)}`, cut: false };
+    }
+    return null;
+  }
+
+  // HTML + canvas size for any design-type block
+  function designInfo(b) {
+    if (b.lang === "flyer") {
+      const sp = specOf(b);
+      if (!sp) return { html: "<!doctype html><body style='font-family:sans-serif;padding:30px'>Could not read this flyer. Try Regenerate.</body>", size: { w: 1080, h: 1350 } };
+      return { html: VastFlyer.render(sp, flyerPhoto(sp)), size: VastFlyer.sizeOf(sp) };
+    }
+    return { html: b.code, size: designSize(b.code) };
+  }
+
   const DESIGN_HELPER = `<style>html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:var(--vw)!important;height:var(--vh)!important}</style>
 <script>
 (function(){
@@ -386,7 +493,7 @@
         if (el.panelFrame.dataset.ready === "1") return setTimeout(res, 300);
         el.panelFrame.addEventListener("load", () => setTimeout(res, 600), { once: true }); setTimeout(res, 6000);
       });
-      const size = designSize(panelBlock.code);
+      const size = designInfo(panelBlock).size;
       const result = await new Promise((res) => {
         exportWaiter = res;
         el.panelFrame.contentWindow.postMessage({ type: "vast-export", w: size.w, h: size.h }, "*");
@@ -405,7 +512,7 @@
   }
 
   function buildPreviewDoc(b) {
-    if (isDesign(b)) return designDoc(b.code, designSize(b.code));
+    if (isDesign(b)) { const d = designInfo(b); return designDoc(d.html, d.size); }
     if (isFile(b)) { const sp = specOf(b); return sp ? VastFiles.previewHtml(b.lang, sp) : "<p style='font-family:sans-serif;padding:20px'>Could not read this file data.</p>"; }
     if (b.lang === "svg") return `<!doctype html><html><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#fff">${b.code}</body></html>`;
     if (["jsx", "tsx", "react"].includes(b.lang)) {
@@ -452,7 +559,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     if (tab === "preview" && panelBlock) {
       const design = isDesign(panelBlock);
       mountFrame(design);
-      if (design) { designSz = designSize(panelBlock.code); fitDesign(); }
+      if (design) { designSz = designInfo(panelBlock).size; fitDesign(); }
       el.panelFrame.dataset.ready = "0";
       el.panelFrame.onload = () => (el.panelFrame.dataset.ready = "1");
       el.panelFrame.srcdoc = buildPreviewDoc(panelBlock);
@@ -493,7 +600,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
   };
   $("panelOpen").onclick = () => {
     if (!panelBlock) return;
-    const doc = isDesign(panelBlock) ? panelBlock.code : canPreview(panelBlock) ? buildPreviewDoc(panelBlock) : `<pre>${escapeHtml(panelBlock.code)}</pre>`;
+    const doc = isDesign(panelBlock) ? designInfo(panelBlock).html : canPreview(panelBlock) ? buildPreviewDoc(panelBlock) : `<pre>${escapeHtml(panelBlock.code)}</pre>`;
     const url = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
     window.open(url, "_blank");
   };
@@ -803,9 +910,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     if (!hasInput()) return;
     if (!models.length) { openSettings(); toast("Add your Groq API key first"); return; }
     let useModel = findModel(settings.model);
-    if (pendingImages.length && !(useModel && useModel.vision)) {
-      useModel = visionModel();
-      if (!useModel) { openSettings(); toast("Add a Gemini API key to send images"); return; }
+    const visualAsk = INTENT.visual.test(text) || activeTool === "image";
+    if (pendingImages.length && !(useModel && useModel.vision) && !visualAsk) {
+      const vm = visionModel();
+      if (vm) useModel = vm;
+      else toast("Photo attached. Add a Gemini key in Settings if you want VastAI to see what's in images.");
     }
 
     let c = current();
@@ -859,7 +968,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     return {
       code: INTENT.code.test(text) || has(["html", "htm", "jsx", "tsx", "react", "svg", "css", "javascript", "js", "python", "dart"]),
       files: INTENT.files.test(text) || has(VastFiles.FILE_LANGS),
-      visual: !!opts.imageMode || INTENT.visual.test(text) || has(["image", "design"]),
+      visual: !!opts.imageMode || INTENT.visual.test(text) || has(["image", "design", "flyer"]),
     };
   }
 
@@ -869,7 +978,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     let sys = settings.systemPrompt;
     if (need.code) sys += CODE_RULES;
     if (need.files) sys += VastFiles.RULES;
-    if (need.visual) sys += IMAGE_RULES + DESIGN_RULES;
+    if (need.visual) {
+      sys += IMAGE_RULES + VastFlyer.RULES + DESIGN_RULES;
+      if (chatPhoto(c)) sys += '\nThe user has attached a photo of themselves in this chat: for flyers set "photo":"user".';
+    }
     if (!need.code && !need.files && !need.visual) sys += "\n\nYou can also build websites, create images and designs, and make PowerPoint, Word, Excel and PDF files when asked.";
     if (memory.enabled) {
       sys += MEMORY_RULES;

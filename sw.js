@@ -1,5 +1,5 @@
 /* VastAI service worker: network-first for the app shell (always fresh), cache as offline fallback */
-const CACHE = "vastai-v8";
+const CACHE = "vastai-v9";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

@@ -14,6 +14,7 @@ A personal ChatGPT-style AI assistant that runs entirely in the browser. Free to
 - Web search with sources (Groq built-in browser search on gpt-oss models)
 - Voice: speak your message (Whisper) and hear replies read aloud
 - Image generation (Pollinations, free, no key)
+- Pro flyer templates (light split and dark spotlight) with your own photo, background removed in the browser, PNG export
 - Memory: VastAI remembers facts about you across chats (view/edit in Memory)
 - Projects: group chats with shared instructions and files
 - Export any chat as Markdown, PDF or Word
