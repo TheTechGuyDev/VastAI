@@ -85,10 +85,13 @@
     }
     return blocks;
   }
-  const isArtifact = (b) => PREVIEW_LANGS.includes(b.lang) || b.code.split("\n").length >= ARTIFACT_MIN_LINES;
-  const canPreview = (b) => PREVIEW_LANGS.includes(b.lang);
+  const isFile = (b) => !!b && VastFiles.FILE_LANGS.includes(b.lang);
+  const isArtifact = (b) => isFile(b) || PREVIEW_LANGS.includes(b.lang) || b.code.split("\n").length >= ARTIFACT_MIN_LINES;
+  const canPreview = (b) => isFile(b) || PREVIEW_LANGS.includes(b.lang);
+  const specOf = (b) => { try { return VastFiles.parseSpec(b.code); } catch { return null; } };
 
   function fileNameFor(b, text) {
+    if (isFile(b)) { const sp = b.closed && specOf(b); return sp ? VastFiles.fileName(b.lang, sp) : VastFiles.LABEL[b.lang]; }
     const ext = EXT[b.lang] || "txt";
     if (ext === "html") {
       const t = (b.code.match(/<title>([^<]{1,60})<\/title>/i) || [])[1];
@@ -115,6 +118,19 @@
       if (idx >= 0) used.add(idx);
       const block = idx >= 0 ? blocks[idx] : null;
       const pre = code.parentElement;
+      if (block && isFile(block)) {
+        const card = document.createElement("div");
+        card.className = "artifact-card file-card";
+        card.dataset.block = idx;
+        const live = opts.streaming && !block.closed;
+        const sp = !live && specOf(block);
+        const sub = live ? `Creating ${VastFiles.LABEL[block.lang]}...` : sp ? `${VastFiles.LABEL[block.lang]} · ${VastFiles.summary(block.lang, sp)} · click to preview` : "Could not build this file. Try Regenerate.";
+        card.innerHTML = `<div class="art-ic file-ic" style="background:${VastFiles.ICON_BG[block.lang]}">${VastFiles.ICON[block.lang]}</div>` +
+          `<div class="art-text"><div class="art-name">${escapeHtml(sp ? VastFiles.fileName(block.lang, sp) : VastFiles.LABEL[block.lang])}</div><div class="art-sub ${live ? "live" : ""}">${escapeHtml(sub)}</div></div>` +
+          (sp ? `<button class="dl-file" title="Download">⤓ Download</button>` : "");
+        pre.replaceWith(card);
+        return;
+      }
       if (block && isArtifact(block)) {
         const card = document.createElement("div");
         card.className = "artifact-card";
@@ -149,6 +165,7 @@
       const row = card.closest(".msg");
       const text = row && row._getText ? row._getText() : "";
       const block = extractBlocks(text)[Number(card.dataset.block)];
+      if (block && e.target.closest(".dl-file")) { downloadFile(block, e.target.closest(".dl-file")); return; }
       if (block) openPanel(block, { preview: canPreview(block) && block.closed });
     }
   });
@@ -156,7 +173,18 @@
   /* ---------- Panel ---------- */
   let panelBlock = null;
 
+  async function downloadFile(b, btn) {
+    const sp = specOf(b);
+    if (!sp) { toast("This file data is broken. Try Regenerate."); return; }
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Building..."; }
+    try { await VastFiles.download(b.lang, sp); toast("Downloaded " + VastFiles.fileName(b.lang, sp)); }
+    catch (err) { toast(err.message || "Could not build file"); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+  }
+
   function buildPreviewDoc(b) {
+    if (isFile(b)) { const sp = specOf(b); return sp ? VastFiles.previewHtml(b.lang, sp) : "<p style='font-family:sans-serif;padding:20px'>Could not read this file data.</p>"; }
     if (b.lang === "svg") return `<!doctype html><html><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#fff">${b.code}</body></html>`;
     if (["jsx", "tsx", "react"].includes(b.lang)) {
       let code = b.code
@@ -225,6 +253,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
   $("panelCopy").onclick = () => panelBlock && navigator.clipboard.writeText(panelBlock.code).then(() => toast("Code copied"));
   $("panelDownload").onclick = () => {
     if (!panelBlock) return;
+    if (isFile(panelBlock)) return downloadFile(panelBlock, null);
     const ext = EXT[panelBlock.lang] || "txt";
     const name = ext === "html" ? "index.html" : fileNameFor(panelBlock).includes(".") ? fileNameFor(panelBlock) : "code." + ext;
     const a = document.createElement("a");
@@ -575,7 +604,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     const p = PROVIDERS[model.provider];
     const payload = {
       model: model.id, stream: true, temperature: Number(settings.temperature),
-      messages: [{ role: "system", content: `${settings.systemPrompt}${CODE_RULES}\n\nCurrent date and time: ${now}.` }, ...buildHistory(c, model)],
+      messages: [{ role: "system", content: `${settings.systemPrompt}${CODE_RULES}${VastFiles.RULES}\n\nCurrent date and time: ${now}.` }, ...buildHistory(c, model)],
     };
 
     controller = new AbortController(); updateSend();
@@ -590,7 +619,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
       const blocks = extractBlocks(full);
       const liveIdx = blocks.findIndex((b) => !b.closed);
       const target = liveIdx >= 0 ? blocks[liveIdx] : null;
-      if (target && isArtifact(target)) {
+      if (target && isArtifact(target) && !isFile(target)) {
         if (!autoOpened || el.panel.classList.contains("open")) { openPanel(target, { live: true }); autoOpened = true; }
       }
       scrollBottom();
@@ -655,7 +684,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     // Finalise panel: show the last artifact, switch to preview when possible
     {
       const arts = extractBlocks(full).filter(isArtifact);
-      const best = arts.filter(canPreview).pop() || arts.pop();
+      const best = arts.filter(isFile).pop() || arts.filter(canPreview).pop() || arts.pop();
       if (best && (autoOpened || canPreview(best) || !isMobile())) openPanel(best, { preview: canPreview(best) });
     }
     scrollBottom();

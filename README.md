@@ -10,6 +10,7 @@ A personal ChatGPT-style AI assistant that runs entirely in the browser. Free to
 - Auto-generated chat titles
 - Model picker (loads the models available on your Groq account)
 - Attach images, PDFs, documents and code files for the AI to read
+- Creates real downloadable PowerPoint, Word, Excel and PDF files with live preview
 - Custom instructions (system prompt) and creativity control
 - Stop and regenerate responses
 - Dark and light theme, mobile responsive
