@@ -340,6 +340,7 @@
 <\/script>`;
 
   function designDoc(code, size) {
+    code = String(code).replace(/^\s*```\w*\s*\n/, "").replace(/\n```\s*$/, "");
     let html = /<html[\s>]/i.test(code) ? code : `<!doctype html><html><head><meta charset="utf-8"></head><body>${code}</body></html>`;
     html = html.replace(/<meta[^>]+viewport[^>]*>/gi, "");
     const helper = DESIGN_HELPER.replace("var(--vw)", size.w + "px").replace("var(--vh)", size.h + "px");
@@ -1351,7 +1352,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     await installEvt.userChoice; installEvt = null; $("installBtn").hidden = true;
   };
   window.addEventListener("appinstalled", () => { $("installBtn").hidden = true; toast("VastAI installed"); });
-  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((r) => r.update()).catch(() => {});
+  }
 
   /* ---------- Init ---------- */
   if (settings.project && !activeProject()) settings.project = null;
