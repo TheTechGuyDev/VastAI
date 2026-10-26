@@ -6,33 +6,37 @@
   };
   const STORE = { chats: "vastai_chats", settings: "vastai_settings", theme: "vastai_theme", memory: "vastai_memory", projects: "vastai_projects" };
   const PREFERRED = ["groq:llama-3.3-70b-versatile", "groq:openai/gpt-oss-120b", "groq:llama-3.1-8b-instant"];
-  const GROQ_EXCLUDE = /whisper|tts|guard|playai|orpheus|distil|compound/i;
+  const GROQ_EXCLUDE = /whisper|tts|guard|playai|orpheus|distil|compound|allam/i;
   const GROQ_VISION = /vision|llama-4|scout|maverick|llava/i;
   const GEMINI_EXCLUDE = /embed|tts|image|live|aqa|imagen|veo|audio|native|learnlm|gemma|thinking-exp|computer|robotics/i;
   const MAX_HISTORY = 24;
   const MAX_FILE_CHARS = 60000;
   const ARTIFACT_MIN_LINES = 12;
-  const PREVIEW_LANGS = ["html", "htm", "svg", "jsx", "tsx", "react"];
+  const PREVIEW_LANGS = ["html", "htm", "svg", "jsx", "tsx", "react", "design"];
   const DEFAULT_SYSTEM =
     "You are VastAI, a helpful, knowledgeable and friendly AI assistant. " +
     "Give clear, accurate, well-structured answers. Use markdown when it helps (lists, tables, code blocks with language tags). " +
     "Be concise unless the user asks for detail. If you are not sure about something, say so.";
   const CODE_RULES =
-    "\n\nCode rules: When asked to build a website, web page, landing page, UI component, game or web app, " +
-    "reply with a one-line intro, then ONE complete self-contained ```html code block (all CSS inside <style>, all JS inside <script>, CDN links allowed, " +
-    "use real-looking content and a polished modern design), then a short summary. Never split HTML, CSS and JS into separate blocks for websites. " +
-    "If the user specifically asks for React, use ONE ```jsx block with a component named App as the default export, no local file imports. " +
-    "For other languages (Python, Dart, etc.) use normal code blocks with the correct language tag.";
-
+    "\n\nCode: for a website, page, UI or web app reply with one intro line, then ONE self-contained ```html block (CSS in <style>, JS in <script>, CDNs ok, polished modern design, real content), then a short summary. " +
+    "If React is requested use ONE ```jsx block exporting a default App component, no local imports. Other languages: normal fenced blocks with the right tag.";
   const IMAGE_RULES =
-    "\n\nImage rules: You CAN create images. When the user asks you to draw, generate, create or design an image, picture, photo, logo, illustration, poster, wallpaper or art, " +
-    "write one short sentence, then ONE fenced block with language tag image containing only JSON: " +
-    '{"prompt":"very detailed English description: subject, style, colours, lighting, composition","width":1024,"height":1024}. ' +
-    "Use 1344x768 for landscape/banners and 768x1344 for portrait/phone wallpapers. For several images use several blocks (max 4). Never say you cannot create images.";
+    "\n\nImages: you CAN create images. For photos, art, illustrations, scenery or icon-style logos WITHOUT words, reply with one short line then a ```image block containing only JSON " +
+    '{"prompt":"detailed English description: subject, style, colours, lighting, composition, no text","width":1024,"height":1024} (1344x768 landscape, 768x1344 portrait, max 4 blocks). ' +
+    "Image models cannot write readable text.";
+  const DESIGN_RULES =
+    "\n\nDesigns: for anything with words on it (flyer, poster, banner, social media post, ad, business card, invitation, certificate, menu, thumbnail, logo with a name) reply with one short line then ONE ```design block: " +
+    'a complete HTML document whose body holds a single <div id="design"> with fixed pixel size (flyer/poster 1080x1350, square post 1080x1080, story 1080x1920, banner 1500x500, business card 1050x600). ' +
+    "Make it look like a professional graphic designer made it: strong hierarchy, big bold headline, Google Fonts (link in head), rich gradients, shapes, icons (emoji or inline SVG), good contrast, all real text from the request (dates, prices, phone, CTA). " +
+    "For photos use <img> with src https://image.pollinations.ai/prompt/URL_ENCODED_PROMPT?width=W&height=H&nologo=true (describe the photo only, never text in it) and object-fit:cover. No external JS. Then a one-line summary.";
   const MEMORY_RULES =
-    "\n\nMemory rules: You have long-term memory of the user (listed below if any). When the user shares a lasting personal fact or preference (name, job, location, projects, likes, how they want answers) " +
-    'or says "remember", add at the very END of your reply a fenced block with language tag memory containing JSON {"save":["fact written in third person"]}. ' +
-    'If they ask you to forget something, use {"forget":["the fact"]}. Do not mention this block or memory saving in your text. Do not save trivial or temporary things.';
+    '\n\nMemory: if the user shares a lasting personal fact or preference or says "remember", end your reply with a ```memory block {"save":["fact in third person"]} ' +
+    '(or {"forget":["fact"]}). Never mention this block. Skip trivial or temporary things.';
+  const INTENT = {
+    code: /\b(website|web ?site|web ?page|landing|html|css|javascript|react|component|code|script|function|program|api|bug|debug|fix|python|flutter|dart|sql|app)\b/i,
+    files: /\b(power ?point|pptx|slides?|deck|presentation|word|docx|excel|xlsx|spreadsheet|sheet|pdf|document|report|download|file)\b/i,
+    visual: /\b(image|picture|photo|pic|draw|logo|flyer|flier|poster|banner|design|illustration|art|artwork|wallpaper|thumbnail|card|invitation|invite|certificate|advert|ad|graphic|generate|post|menu|brochure)\b/i,
+  };
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -101,6 +105,7 @@
     }
     return blocks;
   }
+  const isDesign = (b) => !!b && b.lang === "design";
   const isFile = (b) => !!b && VastFiles.FILE_LANGS.includes(b.lang);
   const isArtifact = (b) => isFile(b) || PREVIEW_LANGS.includes(b.lang) || b.code.split("\n").length >= ARTIFACT_MIN_LINES;
   const canPreview = (b) => isFile(b) || PREVIEW_LANGS.includes(b.lang);
@@ -108,6 +113,10 @@
 
   function fileNameFor(b, text) {
     if (isFile(b)) { const sp = b.closed && specOf(b); return sp ? VastFiles.fileName(b.lang, sp) : VastFiles.LABEL[b.lang]; }
+    if (isDesign(b)) {
+      const t = (b.code.match(/<title>([^<]{1,60})<\/title>/i) || [])[1];
+      return t ? t.trim() : "Design";
+    }
     const ext = EXT[b.lang] || "txt";
     if (ext === "html") {
       const t = (b.code.match(/<title>([^<]{1,60})<\/title>/i) || [])[1];
@@ -154,6 +163,17 @@
         card.innerHTML = `<div class="art-ic file-ic" style="background:${VastFiles.ICON_BG[block.lang]}">${VastFiles.ICON[block.lang]}</div>` +
           `<div class="art-text"><div class="art-name">${escapeHtml(sp ? VastFiles.fileName(block.lang, sp) : VastFiles.LABEL[block.lang])}</div><div class="art-sub ${live ? "live" : ""}">${escapeHtml(sub)}</div></div>` +
           (sp ? `<button class="dl-file" title="Download">⤓ Download</button>` : "");
+        pre.replaceWith(card);
+        return;
+      }
+      if (block && isDesign(block)) {
+        const card = document.createElement("div");
+        card.className = "artifact-card file-card";
+        card.dataset.block = idx;
+        const live = opts.streaming && !block.closed;
+        card.innerHTML = `<div class="art-ic file-ic" style="background:linear-gradient(135deg,#f59e0b,#ec4899)">🎨</div>` +
+          `<div class="art-text"><div class="art-name">${escapeHtml(fileNameFor(block))}</div><div class="art-sub ${live ? "live" : ""}">${live ? "Designing... " + block.code.split("\n").length + " lines" : "Design · click to preview"}</div></div>` +
+          (live ? "" : `<button class="dl-file" data-png="1" title="Download PNG">⤓ PNG</button>`);
         pre.replaceWith(card);
         return;
       }
@@ -252,7 +272,10 @@
       const row = card.closest(".msg");
       const text = row && row._getText ? row._getText() : "";
       const block = extractBlocks(text)[Number(card.dataset.block)];
-      if (block && e.target.closest(".dl-file")) { downloadFile(block, e.target.closest(".dl-file")); return; }
+      if (block && e.target.closest(".dl-file")) {
+        if (isDesign(block)) { openPanel(block, { preview: true }); exportDesign(e.target.closest(".dl-file")); return; }
+        downloadFile(block, e.target.closest(".dl-file")); return;
+      }
       if (block) openPanel(block, { preview: canPreview(block) && block.closed });
     }
   });
@@ -270,7 +293,65 @@
     finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
   }
 
+  const DESIGN_HELPER = `<style>html,body{margin:0!important;background:#e5e7eb!important;overflow-x:hidden}#__wrap{position:relative;margin:16px auto}#__wrap>#design,#__wrap>*{position:absolute!important;left:0;top:0}</style>
+<script>
+(function(){
+  function target(){ return document.getElementById('design') || document.body.firstElementChild; }
+  function fit(){
+    var d = target(); if (!d) return;
+    if (!document.getElementById('__wrap')) { var w = document.createElement('div'); w.id='__wrap'; d.parentNode.insertBefore(w, d); w.appendChild(d); }
+    var wrap = document.getElementById('__wrap');
+    d.style.transform = 'none'; d.style.flexShrink = '0';
+    var W = d.offsetWidth, H = d.offsetHeight, s = Math.min(1, (window.innerWidth - 32) / W);
+    d.style.transformOrigin = 'top left'; d.style.transform = 'scale(' + s + ')';
+    wrap.style.height = (H * s) + 'px'; wrap.style.width = (W * s) + 'px';
+  }
+  window.addEventListener('load', fit); window.addEventListener('resize', fit); setTimeout(fit, 50);
+  function lib(){ return new Promise(function(res, rej){ if (window.htmlToImage) return res();
+    var s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js'; s.onload = res; s.onerror = function(){ rej(new Error('Could not load image exporter')); }; document.head.appendChild(s); }); }
+  window.addEventListener('message', function(e){
+    if (e.data !== 'vast-export') return;
+    var d = target(); var prev = d.style.transform; d.style.transform = 'none';
+    lib().then(function(){ return document.fonts ? document.fonts.ready : null; }).then(function(){
+      return htmlToImage.toPng(d, { pixelRatio: 2, width: d.offsetWidth, height: d.offsetHeight, cacheBust: false,
+        imagePlaceholder: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' });
+    }).then(function(url){ parent.postMessage({ type: 'vast-png', url: url }, '*'); })
+      .catch(function(err){ parent.postMessage({ type: 'vast-png', error: String(err && err.message || err) }, '*'); })
+      .then(function(){ d.style.transform = prev; fit(); });
+  });
+})();
+<\/script>`;
+
+  function designDoc(code) {
+    let html = /<html[\s>]/i.test(code) ? code : `<!doctype html><html><head><meta charset="utf-8"></head><body>${code}</body></html>`;
+    if (!/<meta[^>]+viewport/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + '<meta name="viewport" content="width=device-width,initial-scale=1">');
+    return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, DESIGN_HELPER + "</body>") : html + DESIGN_HELPER;
+  }
+
+  let exportWaiter = null;
+  window.addEventListener("message", (e) => {
+    if (!e.data || e.data.type !== "vast-png" || !exportWaiter) return;
+    const w = exportWaiter; exportWaiter = null; w(e.data);
+  });
+  async function exportDesign(btn) {
+    if (!panelBlock || !isDesign(panelBlock)) return;
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Rendering..."; }
+    toast("Rendering PNG...");
+    try {
+      if (!el.panel.classList.contains("show-preview")) setTab("preview");
+      await new Promise((res) => { if (el.panelFrame.contentDocument === null || el.panelFrame.dataset.ready === "1") return setTimeout(res, 600); el.panelFrame.addEventListener("load", () => setTimeout(res, 800), { once: true }); setTimeout(res, 4000); });
+      const result = await new Promise((res) => { exportWaiter = res; el.panelFrame.contentWindow.postMessage("vast-export", "*"); setTimeout(() => { if (exportWaiter === res) { exportWaiter = null; res({ error: "Timed out" }); } }, 45000); });
+      if (result.error) throw new Error(result.error);
+      const a = document.createElement("a");
+      a.href = result.url; a.download = fileNameFor(panelBlock).replace(/[\\/:*?"<>|]+/g, "") + ".png"; a.click();
+      toast("PNG downloaded");
+    } catch (err) { toast("PNG export failed: " + err.message + ". Try Open ↗ and screenshot."); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+  }
+
   function buildPreviewDoc(b) {
+    if (isDesign(b)) return designDoc(b.code);
     if (isFile(b)) { const sp = specOf(b); return sp ? VastFiles.previewHtml(b.lang, sp) : "<p style='font-family:sans-serif;padding:20px'>Could not read this file data.</p>"; }
     if (b.lang === "svg") return `<!doctype html><html><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#fff">${b.code}</body></html>`;
     if (["jsx", "tsx", "react"].includes(b.lang)) {
@@ -314,7 +395,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
   function setTab(tab) {
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
     el.panel.classList.toggle("show-preview", tab === "preview");
-    if (tab === "preview" && panelBlock) el.panelFrame.srcdoc = buildPreviewDoc(panelBlock);
+    if (tab === "preview" && panelBlock) {
+      el.panelFrame.dataset.ready = "0";
+      el.panelFrame.onload = () => (el.panelFrame.dataset.ready = "1");
+      el.panelFrame.srcdoc = buildPreviewDoc(panelBlock);
+    }
   }
 
   function openPanel(b, { preview = false, live = false } = {}) {
@@ -341,6 +426,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
   $("panelDownload").onclick = () => {
     if (!panelBlock) return;
     if (isFile(panelBlock)) return downloadFile(panelBlock, null);
+    if (isDesign(panelBlock)) return exportDesign(null);
     const ext = EXT[panelBlock.lang] || "txt";
     const name = ext === "html" ? "index.html" : fileNameFor(panelBlock).includes(".") ? fileNameFor(panelBlock) : "code." + ext;
     const a = document.createElement("a");
@@ -705,22 +791,50 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     streamReply(c, m);
   }
 
+  // Which rule sets this turn needs: from the latest user text plus what the previous reply produced
+  function intents(c, opts) {
+    const lastUser = [...c.messages].reverse().find((m) => m.role === "user");
+    const text = lastUser ? (lastUser.display || lastUser.content).slice(0, 2000) : "";
+    const prev = [...c.messages].reverse().find((m) => m.role === "assistant");
+    const prevLangs = prev ? extractBlocks(prev.content).map((b) => b.lang) : [];
+    const has = (langs) => prevLangs.some((l) => langs.includes(l));
+    return {
+      code: INTENT.code.test(text) || has(["html", "htm", "jsx", "tsx", "react", "svg", "css", "javascript", "js", "python", "dart"]),
+      files: INTENT.files.test(text) || has(VastFiles.FILE_LANGS),
+      visual: !!opts.imageMode || INTENT.visual.test(text) || has(["image", "design"]),
+    };
+  }
+
   function buildSystem(c, opts = {}) {
     const now = new Date().toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" });
-    let sys = settings.systemPrompt + CODE_RULES + VastFiles.RULES + IMAGE_RULES;
+    const need = intents(c, opts);
+    let sys = settings.systemPrompt;
+    if (need.code) sys += CODE_RULES;
+    if (need.files) sys += VastFiles.RULES;
+    if (need.visual) sys += IMAGE_RULES + DESIGN_RULES;
+    if (!need.code && !need.files && !need.visual) sys += "\n\nYou can also build websites, create images and designs, and make PowerPoint, Word, Excel and PDF files when asked.";
     if (memory.enabled) {
       sys += MEMORY_RULES;
-      if (memory.items.length) sys += "\n\nWhat you remember about the user:\n" + memory.items.map((m) => "- " + m.text).join("\n");
+      const items = opts.compact ? memory.items.slice(-15) : memory.items.slice(-60);
+      if (items.length) sys += "\n\nWhat you remember about the user:\n" + items.map((m) => "- " + m.text).join("\n");
     }
     const proj = projects.find((p) => p.id === c.projectId);
     if (proj) {
       sys += `\n\nThis chat is part of the project "${proj.name}".`;
       if (proj.instructions) sys += `\nProject instructions:\n${proj.instructions}`;
-      if (proj.files?.length) sys += "\n\nProject files:\n" + proj.files.map((f) => `<file name="${f.name}">\n${f.text}\n</file>`).join("\n").slice(0, 50000);
+      if (proj.files?.length) sys += "\n\nProject files:\n" + proj.files.map((f) => `<file name="${f.name}">\n${f.text}\n</file>`).join("\n").slice(0, opts.compact ? 6000 : 30000);
     }
-    if (opts.imageMode) sys += "\n\nThe user selected the Create image tool: reply with an image block for their request.";
+    if (opts.imageMode) sys += "\n\nThe user picked the Create image tool: reply with an image block, or a design block if the request has text on it.";
     if (opts.search) sys += "\n\nThe user turned on web search: search the web, then answer with up-to-date facts. Mention dates where relevant.";
     return sys + `\n\nCurrent date and time: ${now}.`;
+  }
+
+  // Rough input budget in characters (about 4 chars per token), sized for Groq free-tier limits
+  function charBudget(model, compact) {
+    let b = 36000;
+    if (model.provider === "gemini") b = 300000;
+    else if (/8b|7b|9b|mini|small|instant|gemma/i.test(model.id)) b = 20000;
+    return compact ? Math.floor(b / 2) : b;
   }
 
   function collectSources(tools) {
@@ -772,15 +886,38 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
       .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[#*_>|~-]{1,3}/g, " ").replace(/\s+/g, " ").trim();
   }
 
-  function buildHistory(c, model) {
-    return c.messages.slice(-MAX_HISTORY).map((m) => {
-      if (m.role === "user" && m.images?.length) {
-        if (model.vision) return { role: "user", content: [{ type: "text", text: m.content }, ...m.images.map((url) => ({ type: "image_url", image_url: { url } }))] };
-        return { role: "user", content: `[User attached ${m.images.length} image(s)]\n${m.content}` };
+  const shrinkOld = (t) => String(t)
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, code) => (code.length > 1500 ? "```" + l + "\n" + code.slice(0, 600) + "\n... [rest of earlier code omitted]\n```" : m))
+    .replace(/<file name="([^"]+)">\n([\s\S]*?)\n<\/file>/g, (m, n, body) => (body.length > 3000 ? `<file name="${n}">\n${body.slice(0, 3000)}\n... [rest of file omitted]\n</file>` : m))
+    .replace(/<div class="sources">[\s\S]*?<\/div>/g, "");
+  const cutMiddle = (t, max) => (t.length <= max ? t : t.slice(0, Math.floor(max * 0.7)) + "\n\n... [trimmed to fit] ...\n\n" + t.slice(-Math.floor(max * 0.25)));
+
+  function buildHistory(c, model, budget) {
+    const msgs = c.messages.slice(-MAX_HISTORY);
+    const out = [];
+    let used = 0;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      const recent = i >= msgs.length - 2;
+      let text = recent ? m.content : shrinkOld(m.content);
+      const left = budget - used;
+      if (text.length > left) {
+        if (i === msgs.length - 1) text = cutMiddle(text, Math.max(2000, left));
+        else break;
       }
-      return { role: m.role, content: m.content };
-    });
+      used += text.length;
+      if (m.role === "user" && m.images?.length) {
+        if (model.vision && recent) out.unshift({ role: "user", content: [{ type: "text", text }, ...m.images.map((url) => ({ type: "image_url", image_url: { url } }))] });
+        else out.unshift({ role: "user", content: `[User attached ${m.images.length} image(s)]\n${text}` });
+      } else out.unshift({ role: m.role, content: text });
+    }
+    while (out.length && out[0].role === "assistant") out.shift();
+    return out;
   }
+
+  const isLengthError = (status, detail) => status === 413 || (status === 400 && /reduce the length|context|too long|too large|maximum|tokens/i.test(detail || ""));
+  const bigModel = () => models.find((m) => m.key === "groq:openai/gpt-oss-120b") || models.find((m) => m.key === "groq:llama-3.3-70b-versatile") ||
+    models.find((m) => m.provider === "gemini" && /flash/i.test(m.id)) || null;
 
   async function streamReply(c, model, opts = {}) {
     if (!model) { toast("No model available"); return; }
@@ -791,9 +928,19 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     scrollBottom(true);
 
     const p = PROVIDERS[model.provider];
+    const sysText = buildSystem(c, opts);
     const payload = {
       model: model.id, stream: true, temperature: Number(settings.temperature),
-      messages: [{ role: "system", content: buildSystem(c, opts) }, ...buildHistory(c, model)],
+      messages: [{ role: "system", content: sysText }, ...buildHistory(c, model, Math.max(4000, charBudget(model, opts.compact) - sysText.length))],
+    };
+    // Automatic retry with a trimmed request (and a larger model if needed) when a request is too long
+    const retryShorter = () => {
+      finished = true; controller = null; row.remove();
+      const next = opts.compact ? null : (charBudget(model) < 30000 ? bigModel() || model : model);
+      if (!next) return false;
+      toast(next === model ? "Message was too long, trimming and retrying..." : "Too long for " + model.id + ", retrying with " + next.id);
+      streamReply(c, next, { ...opts, compact: true });
+      return true;
     };
 
     controller = new AbortController(); updateSend();
@@ -825,6 +972,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
         });
         if (!r.ok) {
           let detail = ""; try { detail = (await r.json()).error?.message || ""; } catch {}
+          if (isLengthError(r.status, detail) && !opts.compact && retryShorter()) return;
           if (r.status === 429) throw new Error("Search limit reached for now. Wait a minute and try again. " + detail);
           throw new Error(`Search error ${r.status}: ${detail}`);
         }
@@ -841,9 +989,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
       });
       if (!r.ok) {
         let detail = ""; try { const j = await r.json(); detail = (Array.isArray(j) ? j[0] : j).error?.message || ""; } catch {}
+        if (isLengthError(r.status, detail) && !opts.compact && retryShorter()) return;
         if (r.status === 401 || r.status === 403) throw new Error(`Invalid ${p.name} API key. Update it in Settings.`);
         if (r.status === 429) throw new Error("Free limit reached for now. Wait a minute or switch model. " + detail);
-        if (r.status === 413) throw new Error("Message too long for this model. Start a new chat or switch model.");
+        if (isLengthError(r.status, detail)) throw new Error("This chat is too long for the free model. Start a new chat (your files can be re-attached).");
         throw new Error(`Error ${r.status}: ${detail}`);
       }
       const reader = r.body.getReader();
