@@ -17,10 +17,7 @@
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-top">
-        <div class="brand">
-          <div class="logo">V</div>
-          <span>VastAI</span>
-        </div>
+        <div class="brand"><div class="logo">V</div><span>VastAI</span></div>
         <button class="icon-btn only-mobile" id="closeSidebar" title="Close">✕</button>
       </div>
       <button class="new-chat" id="newChatBtn">＋ New chat</button>
@@ -33,11 +30,14 @@
     </aside>
     <div class="backdrop" id="backdrop"></div>
 
-    <!-- Main -->
+    <!-- Main chat -->
     <main class="main">
       <header class="topbar">
         <button class="icon-btn only-mobile" id="openSidebar" title="Menu">☰</button>
-        <select id="modelSelect" class="model-select" title="Model"></select>
+        <div class="model-picker" id="modelPicker">
+          <button class="model-btn" id="modelBtn"><span id="modelLabel">Loading...</span><span class="chev">▾</span></button>
+          <div class="model-menu" id="modelMenu"></div>
+        </div>
         <div class="topbar-spacer"></div>
         <button class="icon-btn" id="topNewChat" title="New chat">✎</button>
       </header>
@@ -47,10 +47,10 @@
           <div class="logo big">V</div>
           <h1>How can I help you today?</h1>
           <div class="suggestions">
-            <button data-prompt="Explain how a REST API works with a simple example">Explain REST APIs simply</button>
+            <button data-prompt="Build a modern landing page for a Lagos restaurant called Mama's Kitchen with a hero, menu section and contact form">Build a landing page</button>
             <button data-prompt="Write a Python script that renames all files in a folder by date">Write a Python script</button>
             <button data-prompt="Give me 5 business ideas I can start in Lagos with low capital">Business ideas in Lagos</button>
-            <button data-prompt="Help me write a professional email to follow up on an unpaid invoice">Draft a follow-up email</button>
+            <button data-prompt="Build a React todo app with add, complete and delete, styled nicely">Build a React app</button>
           </div>
         </div>
       </section>
@@ -58,14 +58,44 @@
       <footer class="composer-wrap">
         <div class="attachments" id="attachments"></div>
         <div class="composer">
-          <button class="icon-btn attach" id="attachBtn" title="Attach file">📎</button>
-          <input type="file" id="fileInput" multiple hidden accept=".txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.dart,.sql,.xml,.yaml,.yml,.pdf,.log" />
+          <div class="attach-wrap">
+            <button class="icon-btn attach" id="attachBtn" title="Attach">＋</button>
+            <div class="attach-menu" id="attachMenu">
+              <button data-kind="image"><span class="ic">🖼</span><span><b>Image</b><small>PNG, JPG, WEBP</small></span></button>
+              <button data-kind="pdf"><span class="ic">📕</span><span><b>PDF</b><small>Read and summarise PDFs</small></span></button>
+              <button data-kind="doc"><span class="ic">📄</span><span><b>Document or code</b><small>TXT, MD, CSV, JSON, code files</small></span></button>
+            </div>
+          </div>
+          <input type="file" id="fileImage" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" />
+          <input type="file" id="filePdf" multiple hidden accept=".pdf,application/pdf" />
+          <input type="file" id="fileDoc" multiple hidden accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.py,.html,.css,.dart,.sql,.xml,.yaml,.yml,.log,.php,.java,.kt,.swift,.go,.rs,.c,.cpp,.cs,.rb,.sh,.env.example" />
           <textarea id="input" rows="1" placeholder="Message VastAI"></textarea>
           <button class="send" id="sendBtn" title="Send">➤</button>
         </div>
         <p class="hint">VastAI can make mistakes. Check important info.</p>
       </footer>
     </main>
+
+    <!-- Code / preview panel -->
+    <aside class="panel" id="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span id="panelLang" class="lang-pill">html</span><span id="panelName">index.html</span><span id="panelStatus" class="status"></span></div>
+        <div class="tabs">
+          <button class="tab active" data-tab="code">Code</button>
+          <button class="tab" data-tab="preview" id="previewTab">Preview</button>
+        </div>
+        <div class="panel-actions">
+          <button class="icon-btn sm" id="panelCopy" title="Copy">⧉</button>
+          <button class="icon-btn sm" id="panelDownload" title="Download">⤓</button>
+          <button class="icon-btn sm" id="panelOpen" title="Open in new tab">↗</button>
+          <button class="icon-btn sm" id="panelClose" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <pre class="panel-code" id="panelCodeWrap"><code id="panelCode"></code></pre>
+        <iframe id="panelFrame" class="panel-frame" sandbox="allow-scripts allow-forms allow-modals allow-popups" title="Preview"></iframe>
+      </div>
+    </aside>
   </div>
 
   <!-- Settings modal -->
@@ -75,9 +105,12 @@
         <h2>Settings</h2>
         <button class="icon-btn" id="closeSettings">✕</button>
       </div>
-      <label>Groq API key
+      <label>Groq API key (main chat)
         <input type="password" id="apiKey" placeholder="gsk_..." autocomplete="off" />
-        <small>Stored only in this browser. Never sent anywhere except Groq.</small>
+      </label>
+      <label>Gemini API key (images, optional)
+        <input type="password" id="geminiKey" placeholder="AIza..." autocomplete="off" />
+        <small>Keys are stored only in this browser and sent only to Groq or Google.</small>
       </label>
       <label>Custom instructions (system prompt)
         <textarea id="systemPrompt" rows="5"></textarea>
