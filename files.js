@@ -51,77 +51,7 @@
   /* ---------------- PowerPoint ---------------- */
   async function buildPptx(spec) {
     await loadLibs("pptx");
-    const T = theme(spec);
-    const pptx = new PptxGenJS();
-    pptx.layout = "LAYOUT_WIDE"; // 13.33 x 7.5 in
-    pptx.title = spec.title || "Presentation";
-    const W = 13.33, H = 7.5, FONT = "Calibri";
-    const slides = arr(spec.slides);
-
-    slides.forEach((s, i) => {
-      const layout = (s.layout || (i === 0 ? "title" : "bullets")).toLowerCase();
-      const slide = pptx.addSlide();
-      const title = str(s.title);
-      if (s.notes) slide.addNotes(str(s.notes));
-
-      if (layout === "title" || layout === "closing" || layout === "section") {
-        const isSection = layout === "section";
-        slide.background = { color: isSection ? T.primary : T.dark };
-        if (!isSection) slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.25, h: H, fill: { color: T.primary }, line: { color: T.primary } });
-        slide.addText(title, { x: 0.9, y: 2.3, w: W - 1.8, h: 1.6, fontFace: FONT, fontSize: isSection ? 40 : 44, bold: true, color: "FFFFFF", valign: "bottom" });
-        if (s.subtitle) slide.addText(str(s.subtitle), { x: 0.9, y: 4.0, w: W - 1.8, h: 1.0, fontFace: FONT, fontSize: 20, color: isSection ? "FFFFFF" : "CBD5E1", valign: "top" });
-        if (!isSection) slide.addShape(pptx.ShapeType.rect, { x: 0.9, y: 3.95, w: 1.4, h: 0.06, fill: { color: T.primary }, line: { color: T.primary } });
-        return;
-      }
-
-      // Content slide frame
-      slide.background = { color: "FFFFFF" };
-      slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.12, fill: { color: T.primary }, line: { color: T.primary } });
-      slide.addText(title, { x: 0.6, y: 0.35, w: W - 1.2, h: 0.9, fontFace: FONT, fontSize: 30, bold: true, color: T.dark, valign: "middle" });
-      slide.addText(String(i + 1), { x: W - 1.0, y: H - 0.55, w: 0.6, h: 0.35, fontFace: FONT, fontSize: 11, color: T.muted, align: "right" });
-      if (spec.title) slide.addText(str(spec.title), { x: 0.6, y: H - 0.55, w: 8, h: 0.35, fontFace: FONT, fontSize: 11, color: T.muted });
-      const top = 1.45, bodyH = H - top - 0.8;
-
-      const bulletRuns = (items, size) => arr(items).map((b) => ({ text: str(b), options: { bullet: { indent: 18 }, fontSize: size, color: T.text, paraSpaceAfter: 8, breakLine: true } }));
-
-      if (layout === "table") {
-        const cols = arr(s.columns).map(str);
-        const rows = arr(s.rows).map((r) => arr(r).map(str));
-        const data = [];
-        if (cols.length) data.push(cols.map((c) => ({ text: c, options: { bold: true, color: "FFFFFF", fill: { color: T.primary } } })));
-        rows.forEach((r, ri) => data.push(r.map((c) => ({ text: c, options: { color: T.text, fill: { color: ri % 2 ? "F1F5F9" : "FFFFFF" } } }))));
-        if (data.length) slide.addTable(data, { x: 0.6, y: top, w: W - 1.2, fontFace: FONT, fontSize: rows.length > 10 ? 11 : 13, border: { type: "solid", color: "E2E8F0", pt: 1 }, valign: "middle", autoPage: true, autoPageRepeatHeader: true, newSlideStartY: 0.6 });
-      } else if (layout === "stats") {
-        const stats = arr(s.stats).slice(0, 8);
-        const perRow = Math.min(4, stats.length || 1), rowsN = Math.ceil(stats.length / perRow);
-        const gap = 0.3, cw = (W - 1.2 - gap * (perRow - 1)) / perRow, ch = Math.min(2.2, (bodyH - gap * (rowsN - 1)) / rowsN);
-        stats.forEach((st, k) => {
-          const x = 0.6 + (k % perRow) * (cw + gap), y = top + 0.2 + Math.floor(k / perRow) * (ch + gap);
-          slide.addShape(pptx.ShapeType.roundRect, { x, y, w: cw, h: ch, fill: { color: T.light }, line: { color: "E2E8F0" }, rectRadius: 0.12 });
-          slide.addShape(pptx.ShapeType.rect, { x, y, w: 0.08, h: ch, fill: { color: T.primary }, line: { color: T.primary } });
-          slide.addText(str(st.value), { x: x + 0.3, y: y + 0.2, w: cw - 0.5, h: ch * 0.5, fontFace: FONT, fontSize: 28, bold: true, color: T.primary, valign: "bottom", fit: "shrink" });
-          slide.addText(str(st.label), { x: x + 0.3, y: y + ch * 0.55, w: cw - 0.5, h: ch * 0.4, fontFace: FONT, fontSize: 14, color: T.muted, valign: "top" });
-        });
-        if (s.text) slide.addText(str(s.text), { x: 0.6, y: H - 1.5, w: W - 1.2, h: 0.7, fontFace: FONT, fontSize: 14, color: T.text });
-      } else if (layout === "two-column" || layout === "two_column" || layout === "comparison") {
-        const cw = (W - 1.2 - 0.5) / 2;
-        [["leftTitle", "left"], ["rightTitle", "right"]].forEach(([tk, lk], k) => {
-          const x = 0.6 + k * (cw + 0.5);
-          let y = top;
-          if (s[tk]) { slide.addText(str(s[tk]), { x, y, w: cw, h: 0.6, fontFace: FONT, fontSize: 20, bold: true, color: T.primary }); y += 0.7; }
-          slide.addText(bulletRuns(s[lk], 17), { x, y, w: cw, h: bodyH - (y - top), fontFace: FONT, valign: "top", fit: "shrink" });
-        });
-      } else if (layout === "quote") {
-        slide.addText(`“${str(s.quote || s.text)}”`, { x: 1.2, y: 2.0, w: W - 2.4, h: 2.6, fontFace: FONT, fontSize: 30, italic: true, color: T.dark, align: "center", valign: "middle" });
-        if (s.author) slide.addText(str(s.author), { x: 1.2, y: 4.8, w: W - 2.4, h: 0.6, fontFace: FONT, fontSize: 16, color: T.muted, align: "center" });
-      } else {
-        const items = arr(s.bullets);
-        let y = top;
-        if (s.text) { slide.addText(str(s.text), { x: 0.6, y, w: W - 1.2, h: 0.9, fontFace: FONT, fontSize: 17, color: T.muted, valign: "top" }); y += 1.0; }
-        if (items.length) slide.addText(bulletRuns(items, items.length > 7 ? 15 : 18), { x: 0.6, y, w: W - 1.2, h: bodyH - (y - top), fontFace: FONT, valign: "top", fit: "shrink" });
-      }
-    });
-    return pptx.write({ outputType: "blob" });
+    return VastSlides.toPptx(spec);
   }
 
   /* ---------------- Word ---------------- */
@@ -130,7 +60,7 @@
     const T = theme(spec);
     const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, ShadingType, AlignmentType } = window.docx;
     const children = [];
-    if (spec.title) children.push(new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun({ text: str(spec.title), bold: true, color: T.dark })] }));
+    if (spec.title) children.push(new Paragraph({ heading: HeadingLevel.TITLE, border: { bottom: { color: T.primary, space: 6, style: "single", size: 18 } }, spacing: { after: 160 }, children: [new TextRun({ text: str(spec.title), bold: true, color: T.dark, size: 52 })] }));
     if (spec.subtitle) children.push(new Paragraph({ children: [new TextRun({ text: str(spec.subtitle), color: T.muted, size: 26 })], spacing: { after: 300 } }));
     arr(spec.sections).forEach((sec) => {
       if (sec.heading) children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 300, after: 120 }, children: [new TextRun({ text: str(sec.heading), color: T.primary, bold: true })] }));
@@ -190,11 +120,21 @@
       lines.forEach((ln) => { ensure(lh); doc.text(ln, opts.x || M, y + lh * 0.8); y += lh; });
       y += opts.after ?? 2;
     };
-    doc.setFillColor(...rgb(T.primary)); doc.rect(0, 0, PW, 4, "F");
-    if (spec.title) write(str(spec.title), 22, { bold: true, color: T.dark, after: 2 });
-    if (spec.subtitle) write(str(spec.subtitle), 12, { color: T.muted, after: 6 });
+    // Header band
+    const bandH = spec.subtitle ? 46 : 38;
+    doc.setFillColor(...rgb(T.dark)); doc.rect(0, 0, PW, bandH, "F");
+    doc.setFillColor(...rgb(T.primary)); doc.circle(PW - 18, 6, 26, "F"); doc.rect(0, bandH, PW, 2, "F");
+    doc.setFillColor(...rgb(T.dark)); doc.circle(PW - 18, 6, 17, "F");
+    y = 14;
+    if (spec.title) write(str(spec.title), 22, { bold: true, color: "FFFFFF", width: CW - 30, after: 2 });
+    if (spec.subtitle) write(str(spec.subtitle), 11.5, { color: "CBD5E1", width: CW - 30, after: 2 });
+    y = bandH + 10;
     arr(spec.sections).forEach((sec) => {
-      if (sec.heading) { y += 3; write(str(sec.heading), 15, { bold: true, color: T.primary, after: 2 }); }
+      if (sec.heading) {
+        y += 3; ensure(14);
+        doc.setFillColor(...rgb(T.primary)); doc.roundedRect(M, y + 1.2, 1.6, 6, 0.8, 0.8, "F");
+        write(str(sec.heading), 15, { bold: true, color: T.dark, x: M + 4.5, width: CW - 4.5, after: 2 });
+      }
       arr(sec.paragraphs).forEach((p) => write(str(p), 11, { after: 3 }));
       arr(sec.bullets).forEach((b) => {
         ensure(5); doc.setFillColor(...rgb(T.primary)); doc.circle(M + 1.5, y + 2.6, 0.8, "F");
@@ -222,6 +162,11 @@
 
   /* ---------------- HTML previews ---------------- */
   function previewHtml(lang, spec) {
+    try { return lang === "pptx" ? VastSlides.toHtml(spec) : docPreview(lang, spec); }
+    catch (err) { console.error(err); return `<!doctype html><body style="font-family:sans-serif;padding:24px;color:#b91c1c">Preview error: ${esc(err.message)}<br><br>The download may still work.</body>`; }
+  }
+
+  function docPreview(lang, spec) {
     const T = theme(spec);
     const base = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
       *{box-sizing:border-box} body{margin:0;font-family:Calibri,Segoe UI,system-ui,sans-serif;background:#e5e7eb;color:#${T.text}}
@@ -251,22 +196,7 @@
     </style></head><body><div class="wrap">`;
     const tbl = (cols, rows, cls = "t") => `<table class="${cls}"><thead><tr>${arr(cols).map((c) => `<th>${esc(str(c))}</th>`).join("")}</tr></thead><tbody>${arr(rows).map((r) => `<tr>${arr(r).map((c) => `<td>${esc(str(c))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     let body = "";
-    if (lang === "pptx") {
-      body = arr(spec.slides).map((s, i) => {
-        const layout = (s.layout || (i === 0 ? "title" : "bullets")).toLowerCase();
-        if (["title", "closing", "section"].includes(layout)) {
-          const sec = layout === "section";
-          return `<div class="slide ${sec ? "sec" : "dark"}">${sec ? "" : '<div class="bar"></div>'}<div class="in"><h1>${esc(s.title)}</h1>${sec ? "" : '<div class="acc"></div>'}${s.subtitle ? `<div class="sub">${esc(s.subtitle)}</div>` : ""}</div></div>`;
-        }
-        let inner = "";
-        if (layout === "table") inner = tbl(s.columns, s.rows, "");
-        else if (layout === "stats") { const st = arr(s.stats); inner = `<div class="stats" style="grid-template-columns:repeat(${Math.min(4, st.length || 1)},1fr)">${st.map((x) => `<div class="stat"><b>${esc(str(x.value))}</b><span>${esc(str(x.label))}</span></div>`).join("")}</div>${s.text ? `<p style="font-size:1.7cqw">${esc(s.text)}</p>` : ""}`; }
-        else if (["two-column", "two_column", "comparison"].includes(layout)) inner = `<div class="cols"><div>${s.leftTitle ? `<h3>${esc(s.leftTitle)}</h3>` : ""}<ul>${arr(s.left).map((b) => `<li>${esc(str(b))}</li>`).join("")}</ul></div><div>${s.rightTitle ? `<h3>${esc(s.rightTitle)}</h3>` : ""}<ul>${arr(s.right).map((b) => `<li>${esc(str(b))}</li>`).join("")}</ul></div></div>`;
-        else if (layout === "quote") return `<div class="slide"><div class="topbar"></div><div class="in"><div class="quote">“${esc(s.quote || s.text)}”</div>${s.author ? `<div class="author">${esc(s.author)}</div>` : ""}</div></div>`;
-        else inner = `${s.text ? `<p style="font-size:2cqw;color:#${T.muted}">${esc(s.text)}</p>` : ""}<ul>${arr(s.bullets).map((b) => `<li>${esc(str(b))}</li>`).join("")}</ul>`;
-        return `<div class="slide"><div class="topbar"></div><div class="in"><h2>${esc(s.title)}</h2>${inner}</div><div class="num">${i + 1}</div></div>`;
-      }).join("");
-    } else if (lang === "xlsx") {
+    if (lang === "xlsx") {
       body = arr(spec.sheets).map((sh) => `<div class="sheet"><h3>${esc(sh.name || "Sheet")}</h3>${tbl(sh.columns, sh.rows, "")}</div>`).join("");
     } else {
       body = `<div class="page">${spec.title ? `<h1>${esc(spec.title)}</h1>` : ""}${spec.subtitle ? `<div class="sub">${esc(spec.subtitle)}</div>` : ""}` +
@@ -286,11 +216,15 @@
     "\n\nFile rules: You CAN create real downloadable files. When the user asks for a PowerPoint/slides/presentation, Word document, Excel/spreadsheet, or PDF, " +
     "NEVER output base64, binary, XML or code that builds the file. Instead output ONE fenced block with the language tag pptx, docx, xlsx or pdf containing ONLY valid JSON (double quotes, no comments). " +
     "VastAI turns it into the real file with a download button. Add one short sentence before the block and a short summary after.\n" +
-    'pptx JSON: {"filename":"Name","title":"Deck title","theme":{"primary":"10B981","dark":"0F172A"},"slides":[' +
-    '{"layout":"title","title":"...","subtitle":"..."},{"layout":"bullets","title":"...","text":"optional intro","bullets":["..."],"notes":"speaker notes"},' +
-    '{"layout":"stats","title":"...","stats":[{"value":"NGN 131,500","label":"Total paid"}]},{"layout":"table","title":"...","columns":["A","B"],"rows":[["1","2"]]},' +
-    '{"layout":"two-column","title":"...","leftTitle":"...","left":["..."],"rightTitle":"...","right":["..."]},{"layout":"section","title":"..."},{"layout":"quote","quote":"...","author":"..."},' +
-    '{"layout":"closing","title":"Thank you","subtitle":"..."}]}. Make decks of 6-12 slides with varied layouts, max 6 bullets per slide, and pick theme colours that suit the topic.\n' +
+    'pptx JSON: {"filename":"Name","title":"Deck title","theme":{"primary":"2563EB","dark":"0F172A"},"slides":[' +
+    '{"layout":"title","kicker":"short tag e.g. date or company","title":"...","subtitle":"..."},' +
+    '{"layout":"bullets","title":"...","text":"optional one-line intro","bullets":["Short title: one sentence detail"],"notes":"speaker notes"},' +
+    '{"layout":"stats","title":"...","stats":[{"value":"NGN 131,500","label":"Total paid","description":"optional"}]},' +
+    '{"layout":"timeline","title":"...","bullets":["Step title: detail"]},{"layout":"table","title":"...","columns":["A","B"],"rows":[["1","2"]]},' +
+    '{"layout":"two-column","title":"...","leftTitle":"...","left":["..."],"rightTitle":"...","right":["..."]},{"layout":"section","title":"...","subtitle":"..."},' +
+    '{"layout":"quote","quote":"...","author":"..."},{"layout":"closing","title":"Thank you","subtitle":"..."}]}. ' +
+    "Design rules: 7-12 slides, start with title and end with closing, mix layouts (use stats for numbers, timeline for processes, table for lists of records, bullets with 3-4 items show as cards), " +
+    "max 6 bullets per slide, keep each bullet under 20 words, write bullets as 'Short title: detail', and pick theme colours that suit the topic (strong primary, very dark navy/charcoal dark).\n" +
     'docx and pdf JSON: {"filename":"Name","title":"...","subtitle":"...","theme":{"primary":"2B579A"},"sections":[{"heading":"...","paragraphs":["..."],"bullets":["..."],"table":{"columns":["..."],"rows":[["..."]]}}]}\n' +
     'xlsx JSON: {"filename":"Name","sheets":[{"name":"Sheet1","columns":["..."],"rows":[["text",123]]}]} (use numbers for numeric cells).\n' +
     "Use the real data from the conversation and any attached files.";
