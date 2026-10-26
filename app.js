@@ -26,7 +26,7 @@
     "Image models cannot write readable text.";
   const DESIGN_RULES =
     "\n\nDesigns: for anything with words on it (flyer, poster, banner, social media post, ad, business card, invitation, certificate, menu, thumbnail, logo with a name) reply with one short line then ONE ```design block: " +
-    'a complete HTML document whose body holds a single <div id="design"> with fixed pixel size (flyer/poster 1080x1350, square post 1080x1080, story 1080x1920, banner 1500x500, business card 1050x600). ' +
+    'a complete HTML document whose body holds a single <div id="design" style="width:Wpx;height:Hpx;position:relative;overflow:hidden"> (put the size inline) (flyer/poster 1080x1350, square post 1080x1080, story 1080x1920, banner 1500x500, business card 1050x600). ' +
     "Make it look like a professional graphic designer made it: strong hierarchy, big bold headline, Google Fonts (link in head), rich gradients, shapes, icons (emoji or inline SVG), good contrast, all real text from the request (dates, prices, phone, CTA). " +
     "For photos use <img> with src https://image.pollinations.ai/prompt/URL_ENCODED_PROMPT?width=W&height=H&nologo=true (describe the photo only, never text in it) and object-fit:cover. No external JS. Then a one-line summary.";
   const MEMORY_RULES =
@@ -293,40 +293,81 @@
     finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
   }
 
-  const DESIGN_HELPER = `<style>html,body{margin:0!important;background:#e5e7eb!important;overflow-x:hidden}#__wrap{position:relative;margin:16px auto}#__wrap>#design,#__wrap>*{position:absolute!important;left:0;top:0}</style>
+  // Design canvas size: from #design's style/CSS, else common sizes in the code, else 1080x1350
+  function designSize(code) {
+    const px = (re) => { const m = code.match(re); return m ? Number(m[1]) : 0; };
+    const blocks = [];
+    const inline = code.match(/id=["']design["'][^>]*style=["']([^"']+)["']/i) || code.match(/style=["']([^"']+)["'][^>]*id=["']design["']/i);
+    if (inline) blocks.push(inline[1]);
+    const rule = code.match(/#design\s*\{([^}]*)\}/i);
+    if (rule) blocks.push(rule[1]);
+    for (const css of blocks) {
+      const w = (css.match(/(?:^|[;\s])width\s*:\s*(\d{3,4})px/i) || [])[1], h = (css.match(/(?:^|[;\s])height\s*:\s*(\d{3,4})px/i) || [])[1];
+      if (w && h) return { w: +w, h: +h };
+    }
+    const w = px(/width\s*:\s*(1080|1200|1500|1920|1280|1050|1000|800|1600)px/i), h = px(/height\s*:\s*(1080|1350|1920|500|600|630|720|1200|1414|1123|900|1000|800)px/i);
+    return { w: w || 1080, h: h || (w === 1500 ? 500 : 1350) };
+  }
+
+  const DESIGN_HELPER = `<style>html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:var(--vw)!important;height:var(--vh)!important}</style>
 <script>
 (function(){
-  function target(){ return document.getElementById('design') || document.body.firstElementChild; }
-  function fit(){
-    var d = target(); if (!d) return;
-    if (!document.getElementById('__wrap')) { var w = document.createElement('div'); w.id='__wrap'; d.parentNode.insertBefore(w, d); w.appendChild(d); }
-    var wrap = document.getElementById('__wrap');
-    d.style.transform = 'none'; d.style.flexShrink = '0';
-    var W = d.offsetWidth, H = d.offsetHeight, s = Math.min(1, (window.innerWidth - 32) / W);
-    d.style.transformOrigin = 'top left'; d.style.transform = 'scale(' + s + ')';
-    wrap.style.height = (H * s) + 'px'; wrap.style.width = (W * s) + 'px';
-  }
-  window.addEventListener('load', fit); window.addEventListener('resize', fit); setTimeout(fit, 50);
   function lib(){ return new Promise(function(res, rej){ if (window.htmlToImage) return res();
-    var s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js'; s.onload = res; s.onerror = function(){ rej(new Error('Could not load image exporter')); }; document.head.appendChild(s); }); }
+    var s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js';
+    s.onload = res; s.onerror = function(){ rej(new Error('Could not load image exporter')); }; document.head.appendChild(s); }); }
+  function waitImages(){ return Promise.all([].slice.call(document.images).map(function(img){
+    return img.complete ? 0 : new Promise(function(r){ img.onload = img.onerror = r; setTimeout(r, 20000); }); })); }
   window.addEventListener('message', function(e){
-    if (e.data !== 'vast-export') return;
-    var d = target(); var prev = d.style.transform; d.style.transform = 'none';
-    lib().then(function(){ return document.fonts ? document.fonts.ready : null; }).then(function(){
-      return htmlToImage.toPng(d, { pixelRatio: 2, width: d.offsetWidth, height: d.offsetHeight, cacheBust: false,
-        imagePlaceholder: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' });
-    }).then(function(url){ parent.postMessage({ type: 'vast-png', url: url }, '*'); })
-      .catch(function(err){ parent.postMessage({ type: 'vast-png', error: String(err && err.message || err) }, '*'); })
-      .then(function(){ d.style.transform = prev; fit(); });
+    if (!e.data || e.data.type !== 'vast-export') return;
+    var W = e.data.w, H = e.data.h;
+    var d = document.getElementById('design');
+    var useDesign = d && d.offsetWidth >= W * 0.9 && d.offsetHeight >= H * 0.9;
+    var node = useDesign ? d : document.body;
+    var bg = getComputedStyle(document.body).backgroundColor;
+    if (!bg || bg === 'rgba(0, 0, 0, 0)') bg = getComputedStyle(document.documentElement).backgroundColor;
+    if (!bg || bg === 'rgba(0, 0, 0, 0)') bg = '#ffffff';
+    lib().then(waitImages).then(function(){ return document.fonts ? document.fonts.ready : null; }).then(function(){
+      var opts = { pixelRatio: 2, width: useDesign ? d.offsetWidth : W, height: useDesign ? d.offsetHeight : H, cacheBust: false,
+        imagePlaceholder: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' };
+      if (!useDesign || getComputedStyle(d).backgroundColor === 'rgba(0, 0, 0, 0)') opts.backgroundColor = bg;
+      return htmlToImage.toPng(node, opts).catch(function(){ return htmlToImage.toPng(node, Object.assign({}, opts, { filter: function(n){ return n.tagName !== 'IMG'; } })); });
+    }).then(function(url){
+      if (!url || url.length < 2000) throw new Error('The design rendered empty');
+      parent.postMessage({ type: 'vast-png', url: url }, '*');
+    }).catch(function(err){ parent.postMessage({ type: 'vast-png', error: String(err && err.message || err) }, '*'); });
   });
 })();
 <\/script>`;
 
-  function designDoc(code) {
+  function designDoc(code, size) {
     let html = /<html[\s>]/i.test(code) ? code : `<!doctype html><html><head><meta charset="utf-8"></head><body>${code}</body></html>`;
-    if (!/<meta[^>]+viewport/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + '<meta name="viewport" content="width=device-width,initial-scale=1">');
-    return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, DESIGN_HELPER + "</body>") : html + DESIGN_HELPER;
+    html = html.replace(/<meta[^>]+viewport[^>]*>/gi, "");
+    const helper = DESIGN_HELPER.replace("var(--vw)", size.w + "px").replace("var(--vh)", size.h + "px");
+    return /<\/body>/i.test(html) ? html.replace(/<\/body>(?![\s\S]*<\/body>)/i, helper + "</body>") : html + helper;
   }
+
+  // Show the design iframe at its real pixel size, scaled to fit the panel
+  let designSz = null;
+  const designStage = document.createElement("div");
+  designStage.className = "design-stage";
+  designStage.innerHTML = `<div class="design-box"></div>`;
+  el.panelFrame.parentElement.appendChild(designStage);
+  const designBox = designStage.firstElementChild;
+
+  function mountFrame(design) {
+    const parent = design ? designBox : el.panelCodeWrap.parentElement;
+    if (el.panelFrame.parentElement !== parent) parent.appendChild(el.panelFrame);
+    el.panel.classList.toggle("design-mode", !!design);
+    if (!design) { el.panelFrame.style.cssText = ""; designSz = null; }
+  }
+  function fitDesign() {
+    if (!designSz) return;
+    const avail = designStage.clientWidth - 32, availH = designStage.clientHeight - 32;
+    const s = Math.min(1, avail / designSz.w, Math.max(availH, 300) / designSz.h);
+    designBox.style.width = designSz.w * s + "px"; designBox.style.height = designSz.h * s + "px";
+    el.panelFrame.style.cssText = `position:absolute;left:0;top:0;width:${designSz.w}px;height:${designSz.h}px;transform:scale(${s});transform-origin:0 0;display:block;border:0;background:#fff`;
+  }
+  window.addEventListener("resize", fitDesign);
 
   let exportWaiter = null;
   window.addEventListener("message", (e) => {
@@ -337,21 +378,33 @@
     if (!panelBlock || !isDesign(panelBlock)) return;
     const label = btn ? btn.textContent : "";
     if (btn) { btn.disabled = true; btn.textContent = "Rendering..."; }
-    toast("Rendering PNG...");
+    toast("Rendering PNG, this can take a few seconds...");
     try {
       if (!el.panel.classList.contains("show-preview")) setTab("preview");
-      await new Promise((res) => { if (el.panelFrame.contentDocument === null || el.panelFrame.dataset.ready === "1") return setTimeout(res, 600); el.panelFrame.addEventListener("load", () => setTimeout(res, 800), { once: true }); setTimeout(res, 4000); });
-      const result = await new Promise((res) => { exportWaiter = res; el.panelFrame.contentWindow.postMessage("vast-export", "*"); setTimeout(() => { if (exportWaiter === res) { exportWaiter = null; res({ error: "Timed out" }); } }, 45000); });
+      await new Promise((res) => {
+        if (el.panelFrame.dataset.ready === "1") return setTimeout(res, 300);
+        el.panelFrame.addEventListener("load", () => setTimeout(res, 600), { once: true }); setTimeout(res, 6000);
+      });
+      const size = designSize(panelBlock.code);
+      const result = await new Promise((res) => {
+        exportWaiter = res;
+        el.panelFrame.contentWindow.postMessage({ type: "vast-export", w: size.w, h: size.h }, "*");
+        setTimeout(() => { if (exportWaiter === res) { exportWaiter = null; res({ error: "Timed out" }); } }, 60000);
+      });
       if (result.error) throw new Error(result.error);
+      const blob = await (await fetch(result.url)).blob();
+      if (blob.size < 1500) throw new Error("The design rendered empty");
       const a = document.createElement("a");
-      a.href = result.url; a.download = fileNameFor(panelBlock).replace(/[\\/:*?"<>|]+/g, "") + ".png"; a.click();
+      a.href = URL.createObjectURL(blob);
+      a.download = fileNameFor(panelBlock).replace(/[\\/:*?"<>|]+/g, "") + ".png"; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       toast("PNG downloaded");
-    } catch (err) { toast("PNG export failed: " + err.message + ". Try Open ↗ and screenshot."); }
+    } catch (err) { toast("PNG export failed: " + err.message + ". Use Open ↗ and take a screenshot."); }
     finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
   }
 
   function buildPreviewDoc(b) {
-    if (isDesign(b)) return designDoc(b.code);
+    if (isDesign(b)) return designDoc(b.code, designSize(b.code));
     if (isFile(b)) { const sp = specOf(b); return sp ? VastFiles.previewHtml(b.lang, sp) : "<p style='font-family:sans-serif;padding:20px'>Could not read this file data.</p>"; }
     if (b.lang === "svg") return `<!doctype html><html><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#fff">${b.code}</body></html>`;
     if (["jsx", "tsx", "react"].includes(b.lang)) {
@@ -396,9 +449,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
     el.panel.classList.toggle("show-preview", tab === "preview");
     if (tab === "preview" && panelBlock) {
+      const design = isDesign(panelBlock);
+      mountFrame(design);
+      if (design) { designSz = designSize(panelBlock.code); fitDesign(); }
       el.panelFrame.dataset.ready = "0";
       el.panelFrame.onload = () => (el.panelFrame.dataset.ready = "1");
       el.panelFrame.srcdoc = buildPreviewDoc(panelBlock);
+      if (design) requestAnimationFrame(fitDesign);
     }
   }
 
@@ -418,7 +475,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     else if (isNew) setTab("code");
   }
 
-  function closePanel() { el.panel.classList.remove("open"); el.panelFrame.srcdoc = ""; panelBlock = null; }
+  function closePanel() { el.panel.classList.remove("open"); el.panelFrame.srcdoc = ""; panelBlock = null; mountFrame(false); }
 
   document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => !t.disabled && setTab(t.dataset.tab)));
   $("panelClose").onclick = closePanel;
@@ -435,7 +492,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
   };
   $("panelOpen").onclick = () => {
     if (!panelBlock) return;
-    const doc = canPreview(panelBlock) ? buildPreviewDoc(panelBlock) : `<pre>${escapeHtml(panelBlock.code)}</pre>`;
+    const doc = isDesign(panelBlock) ? panelBlock.code : canPreview(panelBlock) ? buildPreviewDoc(panelBlock) : `<pre>${escapeHtml(panelBlock.code)}</pre>`;
     const url = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
     window.open(url, "_blank");
   };
