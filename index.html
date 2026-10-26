@@ -11,6 +11,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 </head>
 <body>
   <div class="app">
@@ -22,8 +26,14 @@
       </div>
       <button class="new-chat" id="newChatBtn">＋ New chat</button>
       <input class="search" id="searchChats" placeholder="Search chats" />
+      <div class="projects">
+        <div class="side-head"><span>Projects</span><button class="mini-btn" id="newProjectBtn" title="New project">＋</button></div>
+        <div id="projectList"></div>
+      </div>
       <nav class="chat-list" id="chatList"></nav>
       <div class="sidebar-bottom">
+        <button class="side-link install" id="installBtn" hidden>⬇ Install app</button>
+        <button class="side-link" id="openMemory">🧠 Memory</button>
         <button class="side-link" id="openSettings">⚙ Settings</button>
         <button class="side-link" id="toggleTheme">◐ Theme</button>
       </div>
@@ -38,7 +48,17 @@
           <button class="model-btn" id="modelBtn"><span id="modelLabel">Loading...</span><span class="chev">▾</span></button>
           <div class="model-menu" id="modelMenu"></div>
         </div>
+        <span class="project-chip" id="projectChip" hidden></span>
         <div class="topbar-spacer"></div>
+        <div class="menu-wrap" id="exportWrap">
+          <button class="icon-btn" id="exportBtn" title="Export chat">⤓</button>
+          <div class="pop-menu" id="exportMenu">
+            <div class="pop-title">Export this chat</div>
+            <button data-fmt="md">📝 Markdown (.md)</button>
+            <button data-fmt="pdf">📕 PDF</button>
+            <button data-fmt="docx">📘 Word (.docx)</button>
+          </div>
+        </div>
         <button class="icon-btn" id="topNewChat" title="New chat">✎</button>
       </header>
 
@@ -61,15 +81,23 @@
           <div class="attach-wrap">
             <button class="icon-btn attach" id="attachBtn" title="Attach">＋</button>
             <div class="attach-menu" id="attachMenu">
+              <div class="pop-title">Upload</div>
               <button data-kind="image"><span class="ic">🖼</span><span><b>Image</b><small>PNG, JPG, WEBP</small></span></button>
               <button data-kind="pdf"><span class="ic">📕</span><span><b>PDF</b><small>Read and summarise PDFs</small></span></button>
               <button data-kind="doc"><span class="ic">📄</span><span><b>Document or code</b><small>TXT, MD, CSV, JSON, code files</small></span></button>
+              <div class="pop-title">Tools</div>
+              <button data-tool="search"><span class="ic">🌐</span><span><b>Web search</b><small>Live answers with sources</small></span></button>
+              <button data-tool="image"><span class="ic">🎨</span><span><b>Create image</b><small>Generate pictures and logos</small></span></button>
             </div>
           </div>
           <input type="file" id="fileImage" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif" />
           <input type="file" id="filePdf" multiple hidden accept=".pdf,application/pdf" />
           <input type="file" id="fileDoc" multiple hidden accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.py,.html,.css,.dart,.sql,.xml,.yaml,.yml,.log,.php,.java,.kt,.swift,.go,.rs,.c,.cpp,.cs,.rb,.sh,.env.example" />
-          <textarea id="input" rows="1" placeholder="Message VastAI"></textarea>
+          <div class="input-col">
+            <div class="tool-chips" id="toolChips"></div>
+            <textarea id="input" rows="1" placeholder="Message VastAI"></textarea>
+          </div>
+          <button class="icon-btn mic" id="micBtn" title="Voice input">🎤</button>
           <button class="send" id="sendBtn" title="Send">➤</button>
         </div>
         <p class="hint">VastAI can make mistakes. Check important info.</p>
@@ -115,12 +143,53 @@
       <label>Custom instructions (system prompt)
         <textarea id="systemPrompt" rows="5"></textarea>
       </label>
+      <label class="check-row"><input type="checkbox" id="autoSpeak" /> Read replies aloud automatically</label>
       <label>Creativity (temperature): <span id="tempVal"></span>
         <input type="range" id="temperature" min="0" max="1.5" step="0.1" />
       </label>
       <div class="modal-actions">
         <button class="danger" id="clearAll">Delete all chats</button>
         <button class="primary" id="saveSettings">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Memory modal -->
+  <div class="modal" id="memoryModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>🧠 Memory</h2>
+        <button class="icon-btn" id="closeMemory">✕</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="memoryEnabled" /> Let VastAI remember things about me across chats</label>
+      <small class="muted">VastAI saves facts when you share them or say "remember...". Stored only in this browser.</small>
+      <div class="mem-list" id="memoryList"></div>
+      <div class="mem-add"><input id="memoryInput" placeholder="Add something to remember..." /><button class="primary" id="memoryAdd">Add</button></div>
+    </div>
+  </div>
+
+  <!-- Project modal -->
+  <div class="modal" id="projectModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="projectModalTitle">New project</h2>
+        <button class="icon-btn" id="closeProject">✕</button>
+      </div>
+      <label>Project name
+        <input type="text" id="projectName" placeholder="e.g. NexerTrade, School SaaS" />
+      </label>
+      <label>Project instructions
+        <textarea id="projectInstructions" rows="4" placeholder="What should VastAI know or do in every chat of this project?"></textarea>
+      </label>
+      <div>
+        <div class="field-label">Project files <small class="muted">(text, code, PDF)</small></div>
+        <div class="proj-files" id="projectFiles"></div>
+        <button class="ghost" id="projectAddFile">＋ Add files</button>
+        <input type="file" id="projectFileInput" multiple hidden accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.py,.html,.css,.dart,.sql,.xml,.yaml,.yml,.log,.php,.java,.kt,.swift,.go,.pdf" />
+      </div>
+      <div class="modal-actions">
+        <button class="danger" id="projectDelete">Delete project</button>
+        <button class="primary" id="projectSave">Save</button>
       </div>
     </div>
   </div>

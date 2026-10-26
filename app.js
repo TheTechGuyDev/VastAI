@@ -4,7 +4,7 @@
     groq: { name: "Groq", base: "https://api.groq.com/openai/v1", key: () => settings.apiKey },
     gemini: { name: "Gemini", base: "https://generativelanguage.googleapis.com/v1beta/openai", key: () => settings.geminiKey },
   };
-  const STORE = { chats: "vastai_chats", settings: "vastai_settings", theme: "vastai_theme" };
+  const STORE = { chats: "vastai_chats", settings: "vastai_settings", theme: "vastai_theme", memory: "vastai_memory", projects: "vastai_projects" };
   const PREFERRED = ["groq:llama-3.3-70b-versatile", "groq:openai/gpt-oss-120b", "groq:llama-3.1-8b-instant"];
   const GROQ_EXCLUDE = /whisper|tts|guard|playai|orpheus|distil|compound/i;
   const GROQ_VISION = /vision|llama-4|scout|maverick|llava/i;
@@ -24,6 +24,16 @@
     "If the user specifically asks for React, use ONE ```jsx block with a component named App as the default export, no local file imports. " +
     "For other languages (Python, Dart, etc.) use normal code blocks with the correct language tag.";
 
+  const IMAGE_RULES =
+    "\n\nImage rules: You CAN create images. When the user asks you to draw, generate, create or design an image, picture, photo, logo, illustration, poster, wallpaper or art, " +
+    "write one short sentence, then ONE fenced block with language tag image containing only JSON: " +
+    '{"prompt":"very detailed English description: subject, style, colours, lighting, composition","width":1024,"height":1024}. ' +
+    "Use 1344x768 for landscape/banners and 768x1344 for portrait/phone wallpapers. For several images use several blocks (max 4). Never say you cannot create images.";
+  const MEMORY_RULES =
+    "\n\nMemory rules: You have long-term memory of the user (listed below if any). When the user shares a lasting personal fact or preference (name, job, location, projects, likes, how they want answers) " +
+    'or says "remember", add at the very END of your reply a fenced block with language tag memory containing JSON {"save":["fact written in third person"]}. ' +
+    'If they ask you to forget something, use {"forget":["the fact"]}. Do not mention this block or memory saving in your text. Do not save trivial or temporary things.';
+
   const $ = (id) => document.getElementById(id);
   const el = {
     sidebar: $("sidebar"), backdrop: $("backdrop"), chatList: $("chatList"), search: $("searchChats"),
@@ -41,7 +51,10 @@
   const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { toast("Storage full. Delete some chats."); } };
 
   let chats = load(STORE.chats, []);
-  let settings = Object.assign({ apiKey: "", geminiKey: "", model: "", systemPrompt: DEFAULT_SYSTEM, temperature: 0.7 }, load(STORE.settings, {}));
+  let settings = Object.assign({ apiKey: "", geminiKey: "", model: "", systemPrompt: DEFAULT_SYSTEM, temperature: 0.7, autoSpeak: false, project: null }, load(STORE.settings, {}));
+  let memory = Object.assign({ enabled: true, items: [] }, load(STORE.memory, {}));
+  let projects = load(STORE.projects, []);
+  let activeTool = null; // "search" | "image"
   if (settings.model && !settings.model.includes(":")) settings.model = "groq:" + settings.model;
   let models = [];
   let currentId = null;
@@ -51,6 +64,9 @@
 
   const persistChats = () => save(STORE.chats, chats);
   const persistSettings = () => save(STORE.settings, settings);
+  const persistMemory = () => save(STORE.memory, memory);
+  const persistProjects = () => save(STORE.projects, projects);
+  const activeProject = () => projects.find((p) => p.id === settings.project) || null;
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const current = () => chats.find((c) => c.id === currentId);
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -118,6 +134,16 @@
       if (idx >= 0) used.add(idx);
       const block = idx >= 0 ? blocks[idx] : null;
       const pre = code.parentElement;
+      if (block && block.lang === "memory") {
+        const pill = document.createElement("div");
+        pill.className = "mem-pill"; pill.textContent = block.closed ? "🧠 Memory updated" : "🧠 Updating memory...";
+        pre.replaceWith(pill);
+        return;
+      }
+      if (block && block.lang === "image") {
+        pre.replaceWith(imageCard(block, opts.streaming && !block.closed));
+        return;
+      }
       if (block && isFile(block)) {
         const card = document.createElement("div");
         card.className = "artifact-card file-card";
@@ -153,7 +179,68 @@
     return wrap.innerHTML;
   }
 
+  /* ---------- Image generation (Pollinations, free, no key) ---------- */
+  const hashSeed = (t) => { let h = 7; for (const ch of t) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % 1000000; };
+  function imageSpec(block) {
+    let sp; try { sp = VastFiles.parseSpec(block.code); } catch { sp = { prompt: block.code }; }
+    const prompt = String(sp.prompt || sp.description || block.code).slice(0, 900);
+    const w = Math.min(1536, Math.max(256, Number(sp.width) || 1024)), h = Math.min(1536, Math.max(256, Number(sp.height) || 1024));
+    return { prompt, w, h, seed: Number(sp.seed) || hashSeed(prompt) };
+  }
+  const imageUrl = (sp, bust) => `https://image.pollinations.ai/prompt/${encodeURIComponent(sp.prompt)}?width=${sp.w}&height=${sp.h}&seed=${sp.seed}&nologo=true&model=flux${bust ? "&r=" + bust : ""}`;
+
+  function imageCard(block, live) {
+    const box = document.createElement("div");
+    box.className = "gen-image";
+    if (live) { box.innerHTML = `<div class="frame"><div class="loading"><span class="spin-big"></span>🎨 Writing image prompt...</div></div>`; return box; }
+    const sp = imageSpec(block);
+    box.dataset.prompt = sp.prompt; box.dataset.w = sp.w; box.dataset.h = sp.h; box.dataset.seed = sp.seed;
+    box.innerHTML = `<div class="frame" style="aspect-ratio:${sp.w}/${sp.h}"><div class="loading">🎨 Creating image...<small>Free service, can take 10-30 seconds</small></div></div>` +
+      `<div class="actions"><button data-img="download">⤓ Download</button><button data-img="open">↗ Open</button><button data-img="retry">↻ New version</button></div>` +
+      `<div class="cap"></div>`;
+    box.querySelector(".cap").textContent = sp.prompt.length > 140 ? sp.prompt.slice(0, 140) + "..." : sp.prompt;
+    return box;
+  }
+
+  // Load images after markdown is inserted into the DOM
+  function hydrateImages(root) {
+    root.querySelectorAll(".gen-image[data-prompt]:not([data-loaded])").forEach((box) => {
+      box.dataset.loaded = "1";
+      loadGenImage(box, 0);
+    });
+  }
+  function loadGenImage(box, attempt) {
+    const sp = { prompt: box.dataset.prompt, w: box.dataset.w, h: box.dataset.h, seed: box.dataset.seed };
+    const img = new Image();
+    img.alt = sp.prompt;
+    img.onload = () => { const f = box.querySelector(".frame"); f.innerHTML = ""; f.appendChild(img); box.dataset.src = img.src; };
+    img.onerror = () => {
+      if (attempt < 3) { setTimeout(() => loadGenImage(box, attempt + 1), 8000 * (attempt + 1)); box.querySelector(".loading").firstChild.textContent = "⏳ Image service busy, retrying... "; return; }
+      box.querySelector(".frame").innerHTML = `<div class="loading">⚠ Could not create the image right now.<small>Click "New version" to try again.</small></div>`;
+    };
+    img.src = imageUrl(sp, attempt ? Date.now() : 0);
+  }
+
+  async function imageAction(box, act) {
+    if (act === "retry") {
+      box.dataset.seed = Math.floor(Math.random() * 1000000);
+      box.querySelector(".frame").innerHTML = `<div class="loading">🎨 Creating a new version...<small>Free service, can take 10-30 seconds</small></div>`;
+      loadGenImage(box, 0); return;
+    }
+    const src = box.dataset.src;
+    if (!src) { toast("Image is still loading"); return; }
+    if (act === "open") { window.open(src, "_blank"); return; }
+    try {
+      const blob = await (await fetch(src)).blob();
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+      a.download = (box.dataset.prompt.slice(0, 40).replace(/[^\w\s-]/g, "").trim() || "vastai-image") + ".jpg"; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    } catch { window.open(src, "_blank"); }
+  }
+
   el.messages.addEventListener("click", (e) => {
+    const imgBtn = e.target.closest("[data-img]");
+    if (imgBtn) { imageAction(imgBtn.closest(".gen-image"), imgBtn.dataset.img); return; }
     const btn = e.target.closest(".copy-code");
     if (btn) {
       const code = btn.closest(".code-block").querySelector("code").innerText;
@@ -280,7 +367,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
 
   function renderChatList() {
     const q = el.search.value.trim().toLowerCase();
+    const pid = settings.project;
     const list = chats
+      .filter((c) => !pid || c.projectId === pid)
       .filter((c) => !q || c.title.toLowerCase().includes(q) || c.messages.some((m) => (m.display || m.content).toLowerCase().includes(q)))
       .sort((a, b) => b.updated - a.updated);
     el.chatList.innerHTML = "";
@@ -353,9 +442,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
       body.appendChild(document.createTextNode(m.display ?? m.content));
       row.appendChild(body);
     } else {
-      row.innerHTML = `<div class="avatar">V</div><div class="body"><div class="md"></div><div class="msg-tools"><button data-act="copy">Copy</button><button data-act="regen">Regenerate</button><span class="model-tag"></span></div></div>`;
+      row.innerHTML = `<div class="avatar">V</div><div class="body"><div class="md"></div><div class="msg-tools"><button data-act="copy">Copy</button><button data-act="speak">🔊 Read</button><button data-act="regen">Regenerate</button><span class="model-tag"></span></div></div>`;
       row._getText = () => m.content;
       row.querySelector(".md").innerHTML = renderMarkdown(m.content, { artifacts: true });
+      hydrateImages(row);
       if (m.model) row.querySelector(".model-tag").textContent = m.model.split(":").pop();
       bindTools(row, m);
     }
@@ -368,6 +458,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     row.querySelector(".msg-tools").onclick = (e) => {
       const act = e.target.dataset.act;
       if (act === "copy") navigator.clipboard.writeText(m.content).then(() => toast("Copied"));
+      if (act === "speak") speak(m.content, e.target);
       if (act === "regen") regenerate();
     };
   }
@@ -429,6 +520,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
 
   el.modelBtn.onclick = (e) => { e.stopPropagation(); el.attachWrap.classList.remove("open"); el.picker.classList.toggle("open"); };
 
+  const searchModel = () => {
+    const cur = findModel(settings.model);
+    if (cur && /gpt-oss/i.test(cur.id) && cur.provider === "groq") return cur;
+    return models.find((m) => m.key === "groq:openai/gpt-oss-120b") || models.find((m) => m.provider === "groq" && /gpt-oss/i.test(m.id) && !/safeguard/i.test(m.id));
+  };
+
   function visionModel() {
     const cur = findModel(settings.model);
     if (cur && cur.vision) return cur;
@@ -470,11 +567,29 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
 
   const inputs = { image: $("fileImage"), pdf: $("filePdf"), doc: $("fileDoc") };
   $("attachBtn").onclick = (e) => { e.stopPropagation(); el.picker.classList.remove("open"); el.attachWrap.classList.toggle("open"); };
-  document.querySelectorAll("#attachMenu button").forEach((b) => (b.onclick = () => { el.attachWrap.classList.remove("open"); inputs[b.dataset.kind].click(); }));
+  document.querySelectorAll("#attachMenu button").forEach((b) => (b.onclick = () => {
+    el.attachWrap.classList.remove("open");
+    if (b.dataset.tool) { setTool(activeTool === b.dataset.tool ? null : b.dataset.tool); el.input.focus(); return; }
+    inputs[b.dataset.kind].click();
+  }));
   document.addEventListener("click", (e) => {
     if (!el.attachWrap.contains(e.target)) el.attachWrap.classList.remove("open");
     if (!el.picker.contains(e.target)) el.picker.classList.remove("open");
+    if (!$("exportWrap").contains(e.target)) $("exportWrap").classList.remove("open");
   });
+
+  function setTool(t) {
+    activeTool = t;
+    const chips = $("toolChips"); chips.innerHTML = "";
+    document.querySelectorAll("#attachMenu [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t));
+    if (!t) { el.input.placeholder = "Message VastAI"; return; }
+    const label = t === "search" ? "🌐 Web search" : "🎨 Create image";
+    el.input.placeholder = t === "search" ? "Search the web for..." : "Describe the image you want...";
+    const chip = document.createElement("span"); chip.className = "tool-chip";
+    chip.innerHTML = `${label} <b title="Remove">✕</b>`;
+    chip.querySelector("b").onclick = () => setTool(null);
+    chips.appendChild(chip);
+  }
 
   async function handleFiles(list, kind) {
     for (const f of list) {
@@ -551,7 +666,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
 
     let c = current();
     if (!c) {
-      c = { id: uid(), title: (text || pendingImages[0]?.name || pendingFiles[0].name).slice(0, 48), messages: [], created: Date.now(), updated: Date.now() };
+      c = { id: uid(), title: (text || pendingImages[0]?.name || pendingFiles[0].name).slice(0, 48), messages: [], created: Date.now(), updated: Date.now(), projectId: settings.project || null };
       chats.push(c); currentId = c.id;
     }
     const fileBlock = pendingFiles.map((f) => `<file name="${f.name}">\n${f.text}\n</file>`).join("\n\n");
@@ -567,7 +682,15 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     addMessageEl(msg);
     el.input.value = ""; pendingFiles = []; pendingImages = []; renderAttachments(); autoGrow();
     renderChatList(); scrollBottom(true);
-    streamReply(c, useModel);
+    const tool = activeTool;
+    if (tool === "image") setTool(null);
+    if (tool === "search") {
+      const sm = searchModel();
+      if (!sm) { toast("Web search needs a gpt-oss model on Groq"); streamReply(c, useModel); return; }
+      streamReply(c, sm, { search: true });
+      return;
+    }
+    streamReply(c, useModel, { imageMode: tool === "image" });
   }
 
   function regenerate() {
@@ -582,6 +705,73 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     streamReply(c, m);
   }
 
+  function buildSystem(c, opts = {}) {
+    const now = new Date().toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" });
+    let sys = settings.systemPrompt + CODE_RULES + VastFiles.RULES + IMAGE_RULES;
+    if (memory.enabled) {
+      sys += MEMORY_RULES;
+      if (memory.items.length) sys += "\n\nWhat you remember about the user:\n" + memory.items.map((m) => "- " + m.text).join("\n");
+    }
+    const proj = projects.find((p) => p.id === c.projectId);
+    if (proj) {
+      sys += `\n\nThis chat is part of the project "${proj.name}".`;
+      if (proj.instructions) sys += `\nProject instructions:\n${proj.instructions}`;
+      if (proj.files?.length) sys += "\n\nProject files:\n" + proj.files.map((f) => `<file name="${f.name}">\n${f.text}\n</file>`).join("\n").slice(0, 50000);
+    }
+    if (opts.imageMode) sys += "\n\nThe user selected the Create image tool: reply with an image block for their request.";
+    if (opts.search) sys += "\n\nThe user turned on web search: search the web, then answer with up-to-date facts. Mention dates where relevant.";
+    return sys + `\n\nCurrent date and time: ${now}.`;
+  }
+
+  function collectSources(tools) {
+    const out = [], seen = new Set();
+    const walk = (o) => {
+      if (!o || out.length >= 8) return;
+      if (typeof o === "string") {
+        if (/^\s*[\[{]/.test(o)) { try { walk(JSON.parse(o)); } catch {} }
+        (o.match(/https?:\/\/[^\s"'<>)\]]+/g) || []).forEach((u) => add(u, ""));
+        return;
+      }
+      if (Array.isArray(o)) return o.forEach(walk);
+      if (typeof o === "object") {
+        if (typeof o.url === "string") add(o.url, o.title || o.name || "");
+        Object.values(o).forEach(walk);
+      }
+    };
+    const add = (url, title) => {
+      url = url.replace(/[.,;]+$/, "");
+      if (seen.has(url) || out.length >= 8) return;
+      seen.add(url);
+      let host = url; try { host = new URL(url).hostname.replace(/^www\./, ""); } catch {}
+      out.push({ url, title: String(title || host).slice(0, 70) });
+    };
+    walk(tools);
+    return out;
+  }
+
+  // Apply memory blocks from a finished reply
+  function applyMemory(text) {
+    if (!memory.enabled) return;
+    extractBlocks(text).filter((b) => b.lang === "memory" && b.closed).forEach((b) => {
+      let sp; try { sp = VastFiles.parseSpec(b.code); } catch { return; }
+      [].concat(sp.save || []).forEach((t) => {
+        t = String(t).trim();
+        if (t && !memory.items.some((m) => m.text.toLowerCase() === t.toLowerCase())) memory.items.push({ id: uid(), text: t, created: Date.now() });
+      });
+      [].concat(sp.forget || []).forEach((t) => {
+        const q = String(t).toLowerCase();
+        memory.items = memory.items.filter((m) => !(m.text.toLowerCase().includes(q) || q.includes(m.text.toLowerCase())));
+      });
+    });
+    persistMemory();
+  }
+
+  // Strip markdown / code for speech
+  function plainText(md) {
+    return String(md).replace(/```[\s\S]*?```/g, " (code omitted) ").replace(/`([^`]+)`/g, "$1").replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[#*_>|~-]{1,3}/g, " ").replace(/\s+/g, " ").trim();
+  }
+
   function buildHistory(c, model) {
     return c.messages.slice(-MAX_HISTORY).map((m) => {
       if (m.role === "user" && m.images?.length) {
@@ -592,7 +782,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     });
   }
 
-  async function streamReply(c, model) {
+  async function streamReply(c, model, opts = {}) {
     if (!model) { toast("No model available"); return; }
     const row = addMessageEl({ role: "assistant", content: "" });
     const mdEl = row.querySelector(".md");
@@ -600,11 +790,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     mdEl.innerHTML = `<span class="thinking"><i></i><i></i><i></i></span>`;
     scrollBottom(true);
 
-    const now = new Date().toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" });
     const p = PROVIDERS[model.provider];
     const payload = {
       model: model.id, stream: true, temperature: Number(settings.temperature),
-      messages: [{ role: "system", content: `${settings.systemPrompt}${CODE_RULES}${VastFiles.RULES}\n\nCurrent date and time: ${now}.` }, ...buildHistory(c, model)],
+      messages: [{ role: "system", content: buildSystem(c, opts) }, ...buildHistory(c, model)],
     };
 
     controller = new AbortController(); updateSend();
@@ -626,6 +815,25 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     };
 
     try {
+      if (opts.search) {
+        mdEl.innerHTML = `<span class="status-line"><span class="spin"></span>Searching the web...</span>`;
+        const body = { ...payload, stream: false, tools: [{ type: "browser_search" }], tool_choice: "required", reasoning_effort: "low",
+          messages: payload.messages.map((m) => (Array.isArray(m.content) ? { role: m.role, content: m.content[0].text } : m)) };
+        const r = await fetch(p.base + "/chat/completions", {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.key() },
+          body: JSON.stringify(body), signal: controller.signal,
+        });
+        if (!r.ok) {
+          let detail = ""; try { detail = (await r.json()).error?.message || ""; } catch {}
+          if (r.status === 429) throw new Error("Search limit reached for now. Wait a minute and try again. " + detail);
+          throw new Error(`Search error ${r.status}: ${detail}`);
+        }
+        const j = await r.json();
+        const msg = j.choices?.[0]?.message || {};
+        full = String(msg.content || "").replace(/【[^】]*】/g, "").trim();
+        const srcs = collectSources(msg.executed_tools);
+        if (srcs.length) full += "\n\n<div class=\"sources\">" + srcs.map((s) => `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">🔗 ${escapeHtml(s.title)}</a>`).join("") + "</div>";
+      } else {
       const r = await fetch(p.base + "/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.key() },
@@ -657,6 +865,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
           } catch {}
         }
       }
+      }
     } catch (err) {
       if (err.name !== "AbortError") {
         finished = true; controller = null; updateSend();
@@ -675,8 +884,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     mdEl.classList.remove("cursor");
     if (!full) full = "_(stopped)_";
     mdEl.innerHTML = renderMarkdown(full, { artifacts: true });
+    hydrateImages(row);
+    applyMemory(full);
     const m = { role: "assistant", content: full, model: model.key };
     c.messages.push(m); c.updated = Date.now(); persistChats(); renderChatList();
+    if (settings.autoSpeak && full !== "_(stopped)_") speak(full);
     row._getText = () => m.content;
     row.querySelector(".model-tag").textContent = model.id;
     tools.style.display = ""; bindTools(row, m);
@@ -713,6 +925,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
   function openSettings() {
     el.apiKey.value = settings.apiKey; el.geminiKey.value = settings.geminiKey; el.sys.value = settings.systemPrompt;
     el.temp.value = settings.temperature; el.tempVal.textContent = settings.temperature;
+    $("autoSpeak").checked = !!settings.autoSpeak;
     el.modal.classList.add("open"); closeSidebar();
   }
   $("openSettings").onclick = openSettings;
@@ -725,6 +938,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     settings.geminiKey = el.geminiKey.value.trim();
     settings.systemPrompt = el.sys.value.trim() || DEFAULT_SYSTEM;
     settings.temperature = Number(el.temp.value);
+    settings.autoSpeak = $("autoSpeak").checked;
     persistSettings(); el.modal.classList.remove("open"); toast("Settings saved");
     if (keysChanged) loadModels();
   };
@@ -733,7 +947,208 @@ ReactDOM.createRoot(document.getElementById('root')).render(<${comp} />);
     chats = []; persistChats(); newChat(); el.modal.classList.remove("open"); toast("All chats deleted");
   };
 
+
+  /* ---------- Voice: read aloud ---------- */
+  let speakingBtn = null;
+  function speak(text, btn) {
+    if (!("speechSynthesis" in window)) { toast("Read aloud is not supported in this browser"); return; }
+    const wasThis = speakingBtn && speakingBtn === btn;
+    speechSynthesis.cancel();
+    if (speakingBtn) speakingBtn.textContent = "🔊 Read";
+    speakingBtn = null;
+    if (wasThis) return;
+    const u = new SpeechSynthesisUtterance(plainText(text).slice(0, 6000));
+    const voices = speechSynthesis.getVoices();
+    u.voice = voices.find((v) => /en-(GB|NG|US)/i.test(v.lang) && /natural|google|online/i.test(v.name)) || voices.find((v) => /^en/i.test(v.lang)) || null;
+    u.rate = 1.03;
+    if (btn) { speakingBtn = btn; btn.textContent = "⏹ Stop"; }
+    u.onend = u.onerror = () => { if (btn) btn.textContent = "🔊 Read"; if (speakingBtn === btn) speakingBtn = null; };
+    speechSynthesis.speak(u);
+  }
+  if ("speechSynthesis" in window) speechSynthesis.getVoices();
+
+  /* ---------- Voice: speech to text (Groq Whisper) ---------- */
+  let recorder = null, chunks = [];
+  const micBtn = $("micBtn");
+  micBtn.onclick = async () => {
+    if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+    if (!settings.apiKey) { openSettings(); toast("Add your Groq key to use voice"); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+      recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      chunks = [];
+      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        micBtn.classList.remove("rec"); micBtn.classList.add("busy"); micBtn.textContent = "⏳";
+        try {
+          const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+          if (blob.size < 2000) throw new Error("Recording too short");
+          const ext = (recorder.mimeType || "").includes("mp4") ? "m4a" : (recorder.mimeType || "").includes("ogg") ? "ogg" : "webm";
+          const fd = new FormData();
+          fd.append("file", blob, "voice." + ext);
+          fd.append("model", "whisper-large-v3-turbo");
+          fd.append("response_format", "json");
+          const r = await fetch(PROVIDERS.groq.base + "/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + settings.apiKey }, body: fd });
+          if (!r.ok) throw new Error("Transcription failed (" + r.status + ")");
+          const text = ((await r.json()).text || "").trim();
+          if (text) { el.input.value = (el.input.value ? el.input.value + " " : "") + text; autoGrow(); updateSend(); el.input.focus(); }
+          else toast("Didn't catch that, try again");
+        } catch (err) { toast(err.message); }
+        micBtn.classList.remove("busy"); micBtn.textContent = "🎤";
+      };
+      recorder.start();
+      micBtn.classList.add("rec"); micBtn.textContent = "⏹"; micBtn.title = "Stop recording";
+      toast("Listening... tap again to stop");
+    } catch { toast("Microphone permission denied"); }
+  };
+
+  /* ---------- Export chat ---------- */
+  $("exportBtn").onclick = (e) => { e.stopPropagation(); $("exportWrap").classList.toggle("open"); };
+  document.querySelectorAll("#exportMenu [data-fmt]").forEach((b) => (b.onclick = () => { $("exportWrap").classList.remove("open"); exportChat(b.dataset.fmt); }));
+
+  const cleanForExport = (t) => String(t || "").replace(/<div class="sources">[\s\S]*?<\/div>/g, "").replace(/```memory[\s\S]*?```/g, "").trim();
+  async function exportChat(fmt) {
+    const c = current();
+    if (!c || !c.messages.length) { toast("Open a chat to export"); return; }
+    const date = new Date(c.created || Date.now()).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+    if (fmt === "md") {
+      const md = `# ${c.title}\n\n_Exported from VastAI · ${date}_\n\n` + c.messages.map((m) =>
+        `## ${m.role === "user" ? "You" : "VastAI"}\n\n${m.role === "user" ? (m.display || m.content) : cleanForExport(m.content)}`).join("\n\n---\n\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+      a.download = c.title.replace(/[\\/:*?"<>|]+/g, "") + ".md"; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      return;
+    }
+    const spec = {
+      filename: c.title, title: c.title, subtitle: `Exported from VastAI · ${date}`,
+      sections: c.messages.map((m) => ({
+        heading: m.role === "user" ? "You" : "VastAI",
+        paragraphs: plainExport(m.role === "user" ? (m.display || m.content) : cleanForExport(m.content)),
+      })),
+    };
+    toast("Building " + (fmt === "pdf" ? "PDF" : "Word file") + "...");
+    try { await VastFiles.download(fmt, spec); } catch (err) { toast(err.message || "Export failed"); }
+  }
+  function plainExport(t) {
+    return String(t).replace(/```(\w+)?\n([\s\S]*?)```/g, (_, l, code) => `[${l || "code"}]\n${code}`)
+      .replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#+\s*/gm, "")
+      .split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  }
+
+  /* ---------- Memory UI ---------- */
+  function renderMemory() {
+    $("memoryEnabled").checked = memory.enabled;
+    const list = $("memoryList"); list.innerHTML = "";
+    if (!memory.items.length) list.innerHTML = `<small class="muted">Nothing saved yet. Try telling VastAI "Remember that I'm based in Lagos".</small>`;
+    memory.items.slice().reverse().forEach((m) => {
+      const row = document.createElement("div"); row.className = "mem-item";
+      row.innerHTML = `<span></span><button title="Forget">🗑</button>`;
+      row.querySelector("span").textContent = m.text;
+      row.querySelector("button").onclick = () => { memory.items = memory.items.filter((x) => x.id !== m.id); persistMemory(); renderMemory(); };
+      list.appendChild(row);
+    });
+  }
+  $("openMemory").onclick = () => { renderMemory(); $("memoryModal").classList.add("open"); closeSidebar(); };
+  $("closeMemory").onclick = () => $("memoryModal").classList.remove("open");
+  $("memoryModal").onclick = (e) => { if (e.target.id === "memoryModal") $("memoryModal").classList.remove("open"); };
+  $("memoryEnabled").onchange = (e) => { memory.enabled = e.target.checked; persistMemory(); toast(memory.enabled ? "Memory on" : "Memory off"); };
+  const addMemory = () => {
+    const t = $("memoryInput").value.trim(); if (!t) return;
+    memory.items.push({ id: uid(), text: t, created: Date.now() }); persistMemory();
+    $("memoryInput").value = ""; renderMemory();
+  };
+  $("memoryAdd").onclick = addMemory;
+  $("memoryInput").onkeydown = (e) => { if (e.key === "Enter") addMemory(); };
+
+  /* ---------- Projects ---------- */
+  let editingProject = null, projectDraftFiles = [];
+  function renderProjects() {
+    const box = $("projectList"); box.innerHTML = "";
+    const mk = (id, name, icon) => {
+      const b = document.createElement("button");
+      b.className = "project-item" + ((settings.project || null) === id ? " active" : "");
+      b.innerHTML = `<span>${icon}</span><span class="title"></span>${id ? '<span class="edit" title="Edit">✎</span>' : ""}`;
+      b.querySelector(".title").textContent = name;
+      b.onclick = (e) => {
+        if (e.target.classList.contains("edit")) { openProject(projects.find((p) => p.id === id)); return; }
+        settings.project = id; persistSettings(); renderProjects(); newChat();
+      };
+      box.appendChild(b);
+    };
+    mk(null, "All chats", "💬");
+    projects.forEach((p) => mk(p.id, p.name, "📁"));
+    const ap = activeProject();
+    $("projectChip").hidden = !ap;
+    if (ap) $("projectChip").textContent = "📁 " + ap.name;
+  }
+  function openProject(p) {
+    editingProject = p || null;
+    projectDraftFiles = p ? [...(p.files || [])] : [];
+    $("projectModalTitle").textContent = p ? "Edit project" : "New project";
+    $("projectName").value = p ? p.name : "";
+    $("projectInstructions").value = p ? p.instructions || "" : "";
+    $("projectDelete").style.visibility = p ? "visible" : "hidden";
+    renderProjectFiles();
+    $("projectModal").classList.add("open"); closeSidebar();
+  }
+  function renderProjectFiles() {
+    const box = $("projectFiles"); box.innerHTML = "";
+    projectDraftFiles.forEach((f, i) => {
+      const row = document.createElement("div"); row.className = "file-chip";
+      row.innerHTML = `<span></span><b title="Remove">✕</b>`;
+      row.querySelector("span").textContent = "📄 " + f.name;
+      row.querySelector("b").onclick = () => { projectDraftFiles.splice(i, 1); renderProjectFiles(); };
+      box.appendChild(row);
+    });
+  }
+  $("newProjectBtn").onclick = () => openProject(null);
+  $("closeProject").onclick = () => $("projectModal").classList.remove("open");
+  $("projectModal").onclick = (e) => { if (e.target.id === "projectModal") $("projectModal").classList.remove("open"); };
+  $("projectAddFile").onclick = () => $("projectFileInput").click();
+  $("projectFileInput").onchange = async (e) => {
+    for (const f of e.target.files) {
+      try {
+        let text = f.name.toLowerCase().endsWith(".pdf") ? await readPdf(f) : await f.text();
+        projectDraftFiles.push({ name: f.name, text: text.slice(0, 30000) });
+      } catch { toast("Could not read " + f.name); }
+    }
+    e.target.value = ""; renderProjectFiles();
+  };
+  $("projectSave").onclick = () => {
+    const name = $("projectName").value.trim();
+    if (!name) { toast("Give the project a name"); return; }
+    const data = { name, instructions: $("projectInstructions").value.trim(), files: projectDraftFiles };
+    if (editingProject) Object.assign(editingProject, data);
+    else { const p = { id: uid(), created: Date.now(), ...data }; projects.push(p); settings.project = p.id; persistSettings(); }
+    persistProjects(); $("projectModal").classList.remove("open"); renderProjects();
+    if (!editingProject) newChat(); else renderChatList();
+    toast("Project saved");
+  };
+  $("projectDelete").onclick = () => {
+    if (!editingProject || !confirm(`Delete project "${editingProject.name}"? Its chats move to All chats.`)) return;
+    chats.forEach((c) => { if (c.projectId === editingProject.id) c.projectId = null; });
+    projects = projects.filter((p) => p.id !== editingProject.id);
+    if (settings.project === editingProject.id) settings.project = null;
+    persistProjects(); persistChats(); persistSettings();
+    $("projectModal").classList.remove("open"); renderProjects(); newChat();
+  };
+
+  /* ---------- Install as app (PWA) ---------- */
+  let installEvt = null;
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; $("installBtn").hidden = false; });
+  $("installBtn").onclick = async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    await installEvt.userChoice; installEvt = null; $("installBtn").hidden = true;
+  };
+  window.addEventListener("appinstalled", () => { $("installBtn").hidden = true; toast("VastAI installed"); });
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+
   /* ---------- Init ---------- */
-  renderChatList(); updateSend(); loadModels();
+  if (settings.project && !activeProject()) settings.project = null;
+  renderProjects(); renderChatList(); updateSend(); loadModels();
   if (!settings.apiKey) setTimeout(openSettings, 400);
 })();
