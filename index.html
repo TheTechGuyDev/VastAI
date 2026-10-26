@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>VastAI</title>
+  <meta name="theme-color" content="#0f1115" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%2310b981'/><text x='50%25' y='56%25' font-size='34' font-family='Arial' font-weight='700' fill='white' text-anchor='middle' dominant-baseline='middle'>V</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="brand">
+          <div class="logo">V</div>
+          <span>VastAI</span>
+        </div>
+        <button class="icon-btn only-mobile" id="closeSidebar" title="Close">✕</button>
+      </div>
+      <button class="new-chat" id="newChatBtn">＋ New chat</button>
+      <input class="search" id="searchChats" placeholder="Search chats" />
+      <nav class="chat-list" id="chatList"></nav>
+      <div class="sidebar-bottom">
+        <button class="side-link" id="openSettings">⚙ Settings</button>
+        <button class="side-link" id="toggleTheme">◐ Theme</button>
+      </div>
+    </aside>
+    <div class="backdrop" id="backdrop"></div>
+
+    <!-- Main -->
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="openSidebar" title="Menu">☰</button>
+        <select id="modelSelect" class="model-select" title="Model"></select>
+        <div class="topbar-spacer"></div>
+        <button class="icon-btn" id="topNewChat" title="New chat">✎</button>
+      </header>
+
+      <section class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <div class="logo big">V</div>
+          <h1>How can I help you today?</h1>
+          <div class="suggestions">
+            <button data-prompt="Explain how a REST API works with a simple example">Explain REST APIs simply</button>
+            <button data-prompt="Write a Python script that renames all files in a folder by date">Write a Python script</button>
+            <button data-prompt="Give me 5 business ideas I can start in Lagos with low capital">Business ideas in Lagos</button>
+            <button data-prompt="Help me write a professional email to follow up on an unpaid invoice">Draft a follow-up email</button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="composer-wrap">
+        <div class="attachments" id="attachments"></div>
+        <div class="composer">
+          <button class="icon-btn attach" id="attachBtn" title="Attach file">📎</button>
+          <input type="file" id="fileInput" multiple hidden accept=".txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.dart,.sql,.xml,.yaml,.yml,.pdf,.log" />
+          <textarea id="input" rows="1" placeholder="Message VastAI"></textarea>
+          <button class="send" id="sendBtn" title="Send">➤</button>
+        </div>
+        <p class="hint">VastAI can make mistakes. Check important info.</p>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" id="closeSettings">✕</button>
+      </div>
+      <label>Groq API key
+        <input type="password" id="apiKey" placeholder="gsk_..." autocomplete="off" />
+        <small>Stored only in this browser. Never sent anywhere except Groq.</small>
+      </label>
+      <label>Custom instructions (system prompt)
+        <textarea id="systemPrompt" rows="5"></textarea>
+      </label>
+      <label>Creativity (temperature): <span id="tempVal"></span>
+        <input type="range" id="temperature" min="0" max="1.5" step="0.1" />
+      </label>
+      <div class="modal-actions">
+        <button class="danger" id="clearAll">Delete all chats</button>
+        <button class="primary" id="saveSettings">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
